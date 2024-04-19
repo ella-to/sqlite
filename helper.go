@@ -29,17 +29,21 @@ func placeholders(count int, sb *strings.Builder) {
 	}
 }
 
-// (?, ?), (?, ?), (?, ?)
-func GroupPlaceholders(numRows, numCols int) string {
-	var sb strings.Builder
+func GroupPlaceholdersStringBuilder(numRows, numCols int, sb *strings.Builder) {
 	for i := 0; i < numRows; i++ {
 		if i > 0 {
 			sb.WriteString(", ")
 		}
 		sb.WriteString("(")
-		placeholders(numCols, &sb)
+		placeholders(numCols, sb)
 		sb.WriteString(")")
 	}
+}
+
+// (?, ?), (?, ?), (?, ?)
+func GroupPlaceholders(numRows, numCols int) string {
+	var sb strings.Builder
+	GroupPlaceholdersStringBuilder(numRows, numCols, &sb)
 	return sb.String()
 }
 
