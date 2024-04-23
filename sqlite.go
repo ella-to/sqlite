@@ -212,7 +212,7 @@ func WithFile(path string) OptionFunc {
 func WithStringConn(stringConn string) OptionFunc {
 	return func(db *Database) error {
 		if db.stringConn != "" {
-			return errors.New("stringConn already set")
+			slog.Warn("stringConn changed", "old", db.stringConn, "new", stringConn)
 		}
 		db.stringConn = stringConn
 		return nil
