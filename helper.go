@@ -2,7 +2,9 @@ package sqlite
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"reflect"
 	"strings"
 	"time"
@@ -11,6 +13,32 @@ import (
 func LoadTime(stmt *Stmt, key string) time.Time {
 	value := stmt.GetInt64(key)
 	return time.Unix(value, 0)
+}
+
+func LoadBool(stmt *Stmt, key string) bool {
+	return stmt.GetInt64(key) == 1
+}
+
+func LoadJsonMap[T any](stmt *Stmt, col string) (map[string]T, error) {
+	var mapper map[string]T
+	err := json.NewDecoder(stmt.GetReader(col)).Decode(&mapper)
+	// NOTE: we need to check for io.EOF because json.NewDecoder returns io.EOF when the input is empty
+	// this is not an error, we can just return an empty slice
+	if err != nil && !errors.Is(err, io.EOF) {
+		return nil, err
+	}
+	return mapper, nil
+}
+
+func LoadJsonArray[T any](stmt *Stmt, col string) ([]T, error) {
+	var array []T
+	err := json.NewDecoder(stmt.GetReader(col)).Decode(&array)
+	// NOTE: we need to check for io.EOF because json.NewDecoder returns io.EOF when the input is empty
+	// this is not an error, we can just return an empty slice
+	if err != nil && !errors.Is(err, io.EOF) {
+		return nil, err
+	}
+	return array, nil
 }
 
 // Placeholders returns a string of ? separated by commas
