@@ -1,6 +1,8 @@
 package sqlite
 
-import "context"
+import (
+	"context"
+)
 
 type task struct {
 	fn   func(conn *Conn)
@@ -34,8 +36,8 @@ func NewWorker(db *Database, queueSize int64, workerSize int64) *Worker {
 
 	for i := 0; i < int(workerSize); i++ {
 		go func() {
-			for task := range w.queue {
-				func() {
+			for t := range w.queue {
+				func(task *task) {
 					ctx := context.Background()
 					conn, err := w.db.Conn(ctx)
 					if err != nil {
@@ -45,7 +47,7 @@ func NewWorker(db *Database, queueSize int64, workerSize int64) *Worker {
 
 					task.fn(conn)
 					task.done <- struct{}{}
-				}()
+				}(t)
 			}
 		}()
 	}

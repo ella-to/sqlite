@@ -186,8 +186,9 @@ func (db *Database) Conn(ctx context.Context) (conn *Conn, err error) {
 }
 
 func (db *Database) Close() error {
-	if db.remaining != int64(db.size) {
-		slog.Warn("database has some connections that are not closed", "still_open", int64(db.size)-db.remaining)
+	remaining := atomic.LoadInt64(&db.remaining)
+	if remaining != int64(db.size) {
+		slog.Warn("database has some connections that are not closed", "still_open", int64(db.size)-remaining)
 	}
 	return db.pool.Close()
 }
