@@ -1,19 +1,15 @@
 package sqlite
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
-	"reflect"
 	"sort"
 	"strings"
 	"sync/atomic"
-	"time"
 
 	"zombiezen.com/go/sqlite"
 	"zombiezen.com/go/sqlite/sqlitex"
@@ -33,6 +29,7 @@ type FunctionImpl = sqlite.FunctionImpl
 type Context = sqlite.Context
 type Value = sqlite.Value
 type AggregateFunction = sqlite.AggregateFunction
+type ConnPrepareFunc = sqlitex.ConnPrepareFunc
 
 var IntegerValue = sqlite.IntegerValue
 
@@ -40,135 +37,14 @@ func Sql(sql string, values ...any) string {
 	return fmt.Sprintf(sql, values...)
 }
 
-type Conn struct {
-	id   int
-	conn *sqlite.Conn
-	db   *Database
-}
-
-// When your try to use transaction in a nice way, you can use the following
-// at the beginning of your code:
-//
-// defer conn.Save(&err)()
-func (c *Conn) Save(err *error) func() {
-	fn := sqlitex.Save(c.conn)
-	return func() {
-		fn(err)
-	}
-}
-
-func (c *Conn) Function(name string, impl *FunctionImpl) error {
-	return c.conn.CreateFunction(name, impl)
-}
-
-func (c *Conn) ExecScript(sql string) error {
-	return sqlitex.ExecScript(c.conn, strings.TrimSpace(sql))
-}
-
-// Close closes the connection and release all the stmts
-// Use this only for when you want to close the connection.
-// Use Done() to put the connection back to the pool
-func (c *Conn) Close() error {
-	return c.conn.Close()
-}
-
-func (c *Conn) Done() {
-	c.db.pool.Put(c.conn)
-	poolSize := atomic.AddInt64(&c.db.remaining, 1)
-	slog.Debug("put connection back to pool", "conn_id", c.id, "pool_size", poolSize)
-}
-
-func (c *Conn) Prepare(ctx context.Context, sql string, values ...any) (*Stmt, error) {
-	if slog.Default().Enabled(ctx, slog.LevelDebug) {
-		slog.Debug("prepare sql", "sql", ShowSql(sql, values...))
-	}
-
-	stmt, err := c.conn.Prepare(strings.TrimSpace(sql))
-	if err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrPrepareSQL, err)
-	}
-
-	for i, value := range values {
-		i++ // bind starts from 1
-
-		if value == nil {
-			stmt.BindNull(i)
-			continue
-		}
-
-		valueType := reflect.TypeOf(value)
-
-		switch valueType.Kind() {
-		case reflect.Slice:
-			if valueType.Elem().Kind() == reflect.Uint8 {
-				blob, ok := value.([]byte)
-				if !ok {
-					blob = value.(json.RawMessage)
-				}
-				stmt.BindZeroBlob(i, int64(len(blob)))
-				stmt.BindBytes(i, blob)
-				continue
-			}
-			fallthrough
-		case reflect.Map:
-			var buffer bytes.Buffer
-			err = json.NewEncoder(&buffer).Encode(value)
-			if err != nil {
-				return nil, err
-			}
-			stmt.BindText(i, buffer.String())
-			continue
-		case reflect.String:
-			stmt.BindText(i, reflect.ValueOf(value).String())
-			continue
-		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-			stmt.BindInt64(i, reflect.ValueOf(value).Int())
-			continue
-		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-			stmt.BindInt64(i, int64(reflect.ValueOf(value).Uint()))
-			continue
-		case reflect.Float32, reflect.Float64:
-			stmt.BindFloat(i, reflect.ValueOf(value).Float())
-			continue
-		case reflect.Bool:
-			stmt.BindBool(i, reflect.ValueOf(value).Bool())
-			continue
-		}
-
-		switch v := value.(type) {
-		case time.Time:
-			stmt.BindInt64(i, v.Unix())
-		case fmt.Stringer:
-			stmt.BindText(i, v.String())
-		default:
-			return nil, ErrUnknownType
-		}
-	}
-
-	return stmt, nil
-}
-
-func (c *Conn) Exec(ctx context.Context, sql string, values ...any) error {
-	stmt, err := c.Prepare(ctx, sql, values...)
-	if err != nil {
-		return fmt.Errorf("%w: %w", ErrPrepareSQL, err)
-	}
-	defer stmt.Finalize()
-
-	_, err = stmt.Step()
-	if err != nil {
-		return fmt.Errorf("%w: %w", ErrExecSQL, err)
-	}
-	return nil
-}
-
 // Database struct which holds pool of connection
 type Database struct {
-	pool       *sqlitex.Pool
-	stringConn string
-	size       int
-	remaining  int64
-	fns        map[string]*FunctionImpl
+	pool          *sqlitex.Pool
+	stringConn    string
+	size          int
+	remaining     int64
+	prepareConnFn ConnPrepareFunc
+	fns           map[string]*FunctionImpl
 }
 
 func (db *Database) PoolSize() int {
@@ -176,7 +52,7 @@ func (db *Database) PoolSize() int {
 }
 
 // Conn returns one connection from connection pool
-// NOTE: make sure to call Close function to put the connection back to the pool
+// NOTE: make sure to call Done() to put the connection back to the pool
 func (db *Database) Conn(ctx context.Context) (conn *Conn, err error) {
 	sqlConn, err := db.pool.Take(ctx)
 	if err != nil {
@@ -185,19 +61,29 @@ func (db *Database) Conn(ctx context.Context) (conn *Conn, err error) {
 
 	conn = &Conn{
 		conn: sqlConn,
-		db:   db,
+		put:  db.put,
 	}
 
 	poolSize := atomic.AddInt64(&db.remaining, -1)
 
-	slog.Debug("get connection from pool", "conn_id", conn.id, "pool_size", poolSize)
+	if slog.Default().Enabled(ctx, slog.LevelDebug) {
+		slog.Debug("get connection from pool", "pool_size", poolSize)
+	}
 	return conn, nil
+}
+
+func (db *Database) put(conn *sqlite.Conn) {
+	db.pool.Put(conn)
+	result := atomic.AddInt64(&db.remaining, 1)
+	if slog.Default().Enabled(context.Background(), slog.LevelDebug) {
+		slog.Debug("put connection back to pool", "pool_size", result)
+	}
 }
 
 func (db *Database) Close() error {
 	remaining := atomic.LoadInt64(&db.remaining)
 	if remaining != int64(db.size) {
-		slog.Warn("database has some connections that are not closed", "still_open", int64(db.size)-remaining)
+		slog.Warn("database has some connections that haven't returned back to the pool", "still_open", int64(db.size)-remaining)
 	}
 	return db.pool.Close()
 }
@@ -240,6 +126,13 @@ func WithPoolSize(size int) OptionFunc {
 	}
 }
 
+func WithConnPrepareFunc(fn ConnPrepareFunc) OptionFunc {
+	return func(db *Database) error {
+		db.prepareConnFn = fn
+		return nil
+	}
+}
+
 func WithFunctions(fns map[string]*FunctionImpl) OptionFunc {
 	return func(db *Database) error {
 		db.fns = fns
@@ -261,38 +154,30 @@ func New(opts ...OptionFunc) (*Database, error) {
 		}
 	}
 
-	db.pool, err = sqlitex.Open(db.stringConn, 0, db.size)
+	db.pool, err = sqlitex.NewPool(db.stringConn, sqlitex.PoolOptions{
+		PoolSize: db.size,
+		PrepareConn: func(conn *sqlite.Conn) error {
+			err = sqlitex.Execute(conn, pragma, nil)
+			if err != nil {
+				return err
+			}
+
+			for name, fn := range db.fns {
+				err = conn.CreateFunction(name, fn)
+				if err != nil {
+					return err
+				}
+			}
+
+			if db.prepareConnFn != nil {
+				return db.prepareConnFn(conn)
+			}
+
+			return nil
+		},
+	})
 	if err != nil {
 		return nil, err
-	}
-
-	// the following loop makes sure that all pool connections have
-	// forgen_key enabled by default
-	connections := make([]*Conn, 0, db.size)
-	for i := 0; i < db.size; i++ {
-		conn, err := db.Conn(context.Background())
-		if err != nil {
-			return nil, err
-		}
-
-		err = conn.Exec(context.Background(), pragma)
-		if err != nil {
-			return nil, err
-		}
-
-		for name, fn := range db.fns {
-			err = conn.Function(name, fn)
-			if err != nil {
-				return nil, err
-			}
-		}
-
-		conn.id = i
-		connections = append(connections, conn)
-	}
-
-	for _, conn := range connections {
-		conn.Done()
 	}
 
 	return db, nil
