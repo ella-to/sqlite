@@ -74,7 +74,6 @@ func loadAlreadyMigratedFiles(ctx context.Context, conn *Conn) ([]string, error)
 	if err != nil {
 		return nil, err
 	}
-	defer stmt.Finalize()
 
 	var filenames []string
 	for {
@@ -101,7 +100,6 @@ func setMigrateFile(ctx context.Context, conn *Conn, filename string, fs ReadDir
 		if err != nil {
 			return err
 		}
-		defer stmt.Finalize()
 
 		_, err = stmt.Step()
 		if err != nil {
