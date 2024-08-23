@@ -43,7 +43,7 @@ func NewWorker(db *Database, queueSize int64, workerSize int64) *Worker {
 					if err != nil {
 						return
 					}
-					defer conn.Close()
+					defer conn.Done()
 
 					task.fn(conn)
 					task.done <- struct{}{}

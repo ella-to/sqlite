@@ -65,7 +65,14 @@ func (c *Conn) ExecScript(sql string) error {
 	return sqlitex.ExecScript(c.conn, strings.TrimSpace(sql))
 }
 
-func (c *Conn) Close() {
+// Close closes the connection and release all the stmts
+// Use this only for when you want to close the connection.
+// Use Done() to put the connection back to the pool
+func (c *Conn) Close() error {
+	return c.conn.Close()
+}
+
+func (c *Conn) Done() {
 	c.db.pool.Put(c.conn)
 	poolSize := atomic.AddInt64(&c.db.remaining, 1)
 	slog.Debug("put connection back to pool", "conn_id", c.id, "pool_size", poolSize)
@@ -285,7 +292,7 @@ func New(opts ...OptionFunc) (*Database, error) {
 	}
 
 	for _, conn := range connections {
-		conn.Close()
+		conn.Done()
 	}
 
 	return db, nil
@@ -296,7 +303,7 @@ func RunScript(ctx context.Context, db *Database, sql string) error {
 	if err != nil {
 		return err
 	}
-	defer conn.Close()
+	defer conn.Done()
 
 	return conn.ExecScript(strings.TrimSpace(sql))
 }
@@ -306,7 +313,7 @@ func RunScriptFiles(ctx context.Context, db *Database, path string) error {
 	if err != nil {
 		return err
 	}
-	defer conn.Close()
+	defer conn.Done()
 
 	files, err := os.ReadDir(path)
 	if err != nil {
