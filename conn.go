@@ -146,7 +146,6 @@ func (c *Conn) Exec(ctx context.Context, sql string, values ...any) error {
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrPrepareSQL, err)
 	}
-	defer stmt.Finalize()
 
 	_, err = stmt.Step()
 	if err != nil {

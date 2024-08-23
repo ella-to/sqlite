@@ -29,7 +29,8 @@ type FunctionImpl = sqlite.FunctionImpl
 type Context = sqlite.Context
 type Value = sqlite.Value
 type AggregateFunction = sqlite.AggregateFunction
-type ConnPrepareFunc = sqlitex.ConnPrepareFunc
+
+type ConnPrepareFunc func(*Conn) error
 
 var IntegerValue = sqlite.IntegerValue
 
@@ -129,7 +130,7 @@ func WithPoolSize(size int) OptionFunc {
 
 func WithConnPrepareFunc(fn ConnPrepareFunc) OptionFunc {
 	return func(db *Database) error {
-		db.prepareConnFn = fn
+		db.prepareConnFn = ConnPrepareFunc(fn)
 		return nil
 	}
 }
@@ -171,7 +172,11 @@ func New(opts ...OptionFunc) (*Database, error) {
 			}
 
 			if db.prepareConnFn != nil {
-				return db.prepareConnFn(conn)
+				return db.prepareConnFn(&Conn{
+					conn:  conn,
+					put:   db.put,
+					stmts: make(map[string]*Stmt),
+				})
 			}
 
 			return nil

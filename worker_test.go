@@ -41,8 +41,6 @@ func TestSqliteWorker(t *testing.T) {
 						return
 					}
 
-					defer stmt.Finalize()
-
 					_, err = stmt.Step()
 					assert.NoError(t, err)
 				})
