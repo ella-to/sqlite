@@ -60,8 +60,9 @@ func (db *Database) Conn(ctx context.Context) (conn *Conn, err error) {
 	}
 
 	conn = &Conn{
-		conn: sqlConn,
-		put:  db.put,
+		conn:  sqlConn,
+		put:   db.put,
+		stmts: make(map[string]*Stmt),
 	}
 
 	poolSize := atomic.AddInt64(&db.remaining, -1)
