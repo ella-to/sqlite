@@ -26,7 +26,7 @@ func Migration(ctx context.Context, db *Database, fs ReadDirFileFS, dir string) 
 	if err != nil {
 		return err
 	}
-	defer conn.Close()
+	defer conn.Done()
 
 	sqlFiles, err := sortMigrationFiles(fs, dir)
 	if err != nil {
