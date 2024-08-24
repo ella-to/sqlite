@@ -132,7 +132,6 @@ func createMigrationTable(ctx context.Context, conn *Conn) (err error) {
 	if err != nil {
 		return err
 	}
-	defer stmt.Finalize()
 
 	_, err = stmt.Step()
 	if err != nil {
