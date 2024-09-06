@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
-	"strings"
 )
 
 type ReadDirFileFS interface {
@@ -117,7 +116,7 @@ func setMigrateFile(ctx context.Context, conn *Conn, filename string, fs ReadDir
 		return err
 	}
 
-	err = conn.Exec(ctx, strings.TrimSpace(string(content)))
+	err = conn.ExecScript(string(content))
 	if err != nil {
 		return err
 	}

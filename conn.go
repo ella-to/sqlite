@@ -160,3 +160,8 @@ func (c *Conn) Exec(ctx context.Context, sql string, values ...any) error {
 
 	return nil
 }
+
+// Use this function to execute a script that contains multiple SQL statements
+func (c *Conn) ExecScript(sql string) error {
+	return sqlitex.ExecScript(c.conn, strings.TrimSpace(sql))
+}
