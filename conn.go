@@ -17,35 +17,36 @@ import (
 type Conn struct {
 	conn  *sqlite.Conn
 	stmts map[string]*Stmt
-	put   func(conn *sqlite.Conn)
+	put   func(conn *Conn)
 }
 
 // When your try to use transaction in a nice way, you can use the following
 // at the beginning of your code:
 //
-// defer conn.Save(&err)()
-func (c *Conn) Save(err *error) func() {
-	fn := sqlitex.Save(c.conn)
-	return func() {
-		fn(err)
-	}
+// defer conn.Save(&err)
+func (c *Conn) Save(err *error) {
+	sqlitex.Save(c.conn)(err)
 }
 
-func (c *Conn) ExecScript(sql string) error {
-	return sqlitex.ExecScript(c.conn, strings.TrimSpace(sql))
+// Done returns the connection back to the pool
+func (c *Conn) Done() {
+	c.put(c)
 }
 
-func (c *Conn) Done() error {
+func (c *Conn) close() error {
 	for _, stmt := range c.stmts {
 		if err := stmt.Finalize(); err != nil {
 			return err
 		}
 	}
 
-	c.put(c.conn)
-	return nil
+	return c.conn.Close()
 }
 
+// Warmup prepares a list of SQL statements and caches them
+// NOTE: usually it is a good idea to warmup the connection at the beginning of the application
+// to avoid any runtime error. However, any subsequent call to this function will return an error
+// All other sql will be automatically prepared and cached when you call Prepare function
 func (c *Conn) Warmup(sqls ...string) error {
 	if len(c.stmts) > 0 {
 		return fmt.Errorf("connection has already warmed up")
@@ -141,15 +142,21 @@ func (c *Conn) Prepare(ctx context.Context, sql string, values ...any) (*Stmt, e
 	return stmt, nil
 }
 
+// Exec executes a single SQL statement and does not cache it
 func (c *Conn) Exec(ctx context.Context, sql string, values ...any) error {
 	stmt, err := c.Prepare(ctx, sql, values...)
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrPrepareSQL, err)
 	}
+	defer func() {
+		stmt.Finalize()
+		delete(c.stmts, sql)
+	}()
 
 	_, err = stmt.Step()
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrExecSQL, err)
 	}
+
 	return nil
 }

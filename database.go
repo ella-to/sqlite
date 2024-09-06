@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"sync/atomic"
 
 	"zombiezen.com/go/sqlite"
 	"zombiezen.com/go/sqlite/sqlitex"
@@ -40,54 +39,43 @@ func Sql(sql string, values ...any) string {
 
 // Database struct which holds pool of connection
 type Database struct {
-	pool          *sqlitex.Pool
 	stringConn    string
-	size          int
-	remaining     int64
 	prepareConnFn ConnPrepareFunc
 	fns           map[string]*FunctionImpl
-}
-
-func (db *Database) PoolSize() int {
-	return db.size
+	size          int
+	conns         chan *Conn
 }
 
 // Conn returns one connection from connection pool
 // NOTE: make sure to call Done() to put the connection back to the pool
+// usually right after this call, you should call defer conn.Done()
 func (db *Database) Conn(ctx context.Context) (conn *Conn, err error) {
-	sqlConn, err := db.pool.Take(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	conn = &Conn{
-		conn:  sqlConn,
-		put:   db.put,
-		stmts: make(map[string]*Stmt),
-	}
-
-	poolSize := atomic.AddInt64(&db.remaining, -1)
-
-	if slog.Default().Enabled(ctx, slog.LevelDebug) {
-		slog.Debug("get connection from pool", "pool_size", poolSize)
-	}
-	return conn, nil
-}
-
-func (db *Database) put(conn *sqlite.Conn) {
-	db.pool.Put(conn)
-	result := atomic.AddInt64(&db.remaining, 1)
-	if slog.Default().Enabled(context.Background(), slog.LevelDebug) {
-		slog.Debug("put connection back to pool", "pool_size", result)
+	select {
+	case <-ctx.Done():
+		return nil, fmt.Errorf("get sqlite connection: %w", ctx.Err())
+	case conn = <-db.conns:
+		return conn, nil
 	}
 }
 
+func (db *Database) put(conn *Conn) {
+	db.conns <- conn
+}
+
+// Close closes all the connections in the pool
+// and returns error if any connection fails to close
+// NOTE: make sure to call this function at the end of your application
 func (db *Database) Close() error {
-	remaining := atomic.LoadInt64(&db.remaining)
-	if remaining != int64(db.size) {
-		slog.Warn("database has some connections that haven't returned back to the pool", "still_open", int64(db.size)-remaining)
+	close(db.conns)
+
+	for conn := range db.conns {
+		err := conn.close()
+		if err != nil {
+			return err
+		}
 	}
-	return db.pool.Close()
+
+	return nil
 }
 
 type OptionFunc func(*Database) error
@@ -119,11 +107,8 @@ func WithStringConn(stringConn string) OptionFunc {
 
 func WithPoolSize(size int) OptionFunc {
 	return func(db *Database) error {
-		if db.size != 0 {
-			return errors.New("pool size already set")
-		}
 		db.size = size
-		db.remaining = int64(size)
+		db.conns = make(chan *Conn, size)
 		return nil
 	}
 }
@@ -146,8 +131,6 @@ func WithFunctions(fns map[string]*FunctionImpl) OptionFunc {
 func New(opts ...OptionFunc) (*Database, error) {
 	const pragma = `PRAGMA foreign_keys = ON;`
 
-	var err error
-
 	db := &Database{}
 	for _, opt := range opts {
 		err := opt(db)
@@ -156,34 +139,38 @@ func New(opts ...OptionFunc) (*Database, error) {
 		}
 	}
 
-	db.pool, err = sqlitex.NewPool(db.stringConn, sqlitex.PoolOptions{
-		PoolSize: db.size,
-		PrepareConn: func(conn *sqlite.Conn) error {
-			err = sqlitex.Execute(conn, pragma, nil)
+	for range db.size {
+		conn, err := sqlite.OpenConn(db.stringConn)
+		if err != nil {
+			return nil, err
+		}
+
+		err = sqlitex.ExecScript(conn, pragma)
+		if err != nil {
+			return nil, err
+		}
+
+		for name, fn := range db.fns {
+			err = conn.CreateFunction(name, fn)
 			if err != nil {
-				return err
+				return nil, err
 			}
+		}
 
-			for name, fn := range db.fns {
-				err = conn.CreateFunction(name, fn)
-				if err != nil {
-					return err
-				}
+		c := &Conn{
+			conn:  conn,
+			stmts: make(map[string]*Stmt),
+			put:   db.put,
+		}
+
+		if db.prepareConnFn != nil {
+			err = db.prepareConnFn(c)
+			if err != nil {
+				return nil, err
 			}
+		}
 
-			if db.prepareConnFn != nil {
-				return db.prepareConnFn(&Conn{
-					conn:  conn,
-					put:   db.put,
-					stmts: make(map[string]*Stmt),
-				})
-			}
-
-			return nil
-		},
-	})
-	if err != nil {
-		return nil, err
+		c.Done()
 	}
 
 	return db, nil
@@ -196,7 +183,7 @@ func RunScript(ctx context.Context, db *Database, sql string) error {
 	}
 	defer conn.Done()
 
-	return conn.ExecScript(strings.TrimSpace(sql))
+	return conn.Exec(ctx, strings.TrimSpace(sql))
 }
 
 func RunScriptFiles(ctx context.Context, db *Database, path string) error {
@@ -236,7 +223,7 @@ func RunScriptFiles(ctx context.Context, db *Database, path string) error {
 			return err
 		}
 
-		err = conn.ExecScript(string(sql))
+		err = conn.Exec(ctx, string(sql))
 		if err != nil {
 			return err
 		}
