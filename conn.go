@@ -15,9 +15,8 @@ import (
 )
 
 type Conn struct {
-	conn  *sqlite.Conn
-	stmts map[string]*Stmt
-	put   func(conn *Conn)
+	conn *sqlite.Conn
+	put  func(conn *Conn)
 }
 
 // When your try to use transaction in a nice way, you can use the following
@@ -33,42 +32,6 @@ func (c *Conn) Done() {
 	c.put(c)
 }
 
-func (c *Conn) close() error {
-	for _, stmt := range c.stmts {
-		if err := stmt.Finalize(); err != nil {
-			return err
-		}
-	}
-
-	return c.conn.Close()
-}
-
-// Warmup prepares a list of SQL statements and caches them
-// NOTE: usually it is a good idea to warmup the connection at the beginning of the application
-// to avoid any runtime error. However, any subsequent call to this function will return an error
-// All other sql will be automatically prepared and cached when you call Prepare function
-func (c *Conn) Warmup(sqls ...string) error {
-	if len(c.stmts) > 0 {
-		return fmt.Errorf("connection has already warmed up")
-	}
-
-	if len(sqls) == 0 {
-		return nil
-	}
-
-	c.stmts = make(map[string]*Stmt, len(sqls))
-
-	for _, sql := range sqls {
-		stmt, err := c.conn.Prepare(sql)
-		if err != nil {
-			return err
-		}
-		c.stmts[sql] = stmt
-	}
-
-	return nil
-}
-
 func (c *Conn) Prepare(ctx context.Context, sql string, values ...any) (*Stmt, error) {
 	if slog.Default().Enabled(ctx, slog.LevelDebug) {
 		slog.Debug("prepare sql", "sql", ShowSql(sql, values...))
@@ -80,7 +43,6 @@ func (c *Conn) Prepare(ctx context.Context, sql string, values ...any) (*Stmt, e
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrPrepareSQL, err)
 	}
-	c.stmts[sql] = stmt
 
 	for i, value := range values {
 		i++ // bind starts from 1
@@ -140,25 +102,6 @@ func (c *Conn) Prepare(ctx context.Context, sql string, values ...any) (*Stmt, e
 	}
 
 	return stmt, nil
-}
-
-// Exec executes a single SQL statement and does not cache it
-func (c *Conn) Exec(ctx context.Context, sql string, values ...any) error {
-	stmt, err := c.Prepare(ctx, sql, values...)
-	if err != nil {
-		return fmt.Errorf("%w: %w", ErrPrepareSQL, err)
-	}
-	defer func() {
-		stmt.Finalize()
-		delete(c.stmts, sql)
-	}()
-
-	_, err = stmt.Step()
-	if err != nil {
-		return fmt.Errorf("%w: %w", ErrExecSQL, err)
-	}
-
-	return nil
 }
 
 // Use this function to execute a script that contains multiple SQL statements

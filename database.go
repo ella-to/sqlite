@@ -40,42 +40,36 @@ func Sql(sql string, values ...any) string {
 // Database struct which holds pool of connection
 type Database struct {
 	stringConn    string
+	pool          *sqlitex.Pool
+	size          int
 	prepareConnFn ConnPrepareFunc
 	fns           map[string]*FunctionImpl
-	size          int
-	conns         chan *Conn
 }
 
 // Conn returns one connection from connection pool
 // NOTE: make sure to call Done() to put the connection back to the pool
 // usually right after this call, you should call defer conn.Done()
-func (db *Database) Conn(ctx context.Context) (conn *Conn, err error) {
-	select {
-	case <-ctx.Done():
-		return nil, fmt.Errorf("get sqlite connection: %w", ctx.Err())
-	case conn = <-db.conns:
-		return conn, nil
+func (db *Database) Conn(ctx context.Context) (*Conn, error) {
+	conn, err := db.pool.Take(ctx)
+	if err != nil {
+		return nil, err
 	}
+
+	return &Conn{
+		conn: conn,
+		put:  db.put,
+	}, nil
 }
 
 func (db *Database) put(conn *Conn) {
-	db.conns <- conn
+	db.pool.Put(conn.conn)
 }
 
 // Close closes all the connections in the pool
 // and returns error if any connection fails to close
 // NOTE: make sure to call this function at the end of your application
 func (db *Database) Close() error {
-	close(db.conns)
-
-	for conn := range db.conns {
-		err := conn.close()
-		if err != nil {
-			return err
-		}
-	}
-
-	return nil
+	return db.pool.Close()
 }
 
 type OptionFunc func(*Database) error
@@ -108,7 +102,6 @@ func WithStringConn(stringConn string) OptionFunc {
 func WithPoolSize(size int) OptionFunc {
 	return func(db *Database) error {
 		db.size = size
-		db.conns = make(chan *Conn, size)
 		return nil
 	}
 }
@@ -129,7 +122,12 @@ func WithFunctions(fns map[string]*FunctionImpl) OptionFunc {
 
 // New creates a sqlite database
 func New(opts ...OptionFunc) (*Database, error) {
-	const pragma = `PRAGMA foreign_keys = ON;`
+	pragma := strings.TrimSpace(`
+		PRAGMA foreign_keys = ON;
+		PRAGMA journal_mode = WAL;
+		PRAGMA cache_size = -2000;  -- Use negative value for KB size (here, 2MB)
+		PRAGMA temp_store = MEMORY;
+	`)
 
 	db := &Database{}
 	for _, opt := range opts {
@@ -139,39 +137,30 @@ func New(opts ...OptionFunc) (*Database, error) {
 		}
 	}
 
-	for range db.size {
-		conn, err := sqlite.OpenConn(db.stringConn)
-		if err != nil {
-			return nil, err
-		}
+	pool, err := sqlitex.NewPool(
+		db.stringConn,
+		sqlitex.PoolOptions{
+			Flags:    0,
+			PoolSize: db.size,
+			PrepareConn: func(conn *sqlite.Conn) error {
+				err := sqlitex.ExecScript(conn, pragma)
+				if err != nil {
+					return err
+				}
 
-		err = sqlitex.ExecScript(conn, pragma)
-		if err != nil {
-			return nil, err
-		}
+				if db.prepareConnFn != nil {
+					return db.prepareConnFn(&Conn{conn: conn, put: func(conn *Conn) {}})
+				}
 
-		for name, fn := range db.fns {
-			err = conn.CreateFunction(name, fn)
-			if err != nil {
-				return nil, err
-			}
-		}
-
-		c := &Conn{
-			conn:  conn,
-			stmts: make(map[string]*Stmt),
-			put:   db.put,
-		}
-
-		if db.prepareConnFn != nil {
-			err = db.prepareConnFn(c)
-			if err != nil {
-				return nil, err
-			}
-		}
-
-		c.Done()
+				return nil
+			},
+		},
+	)
+	if err != nil {
+		return nil, err
 	}
+
+	db.pool = pool
 
 	return db, nil
 }
@@ -183,16 +172,10 @@ func RunScript(ctx context.Context, db *Database, sql string) error {
 	}
 	defer conn.Done()
 
-	return conn.Exec(ctx, strings.TrimSpace(sql))
+	return sqlitex.ExecScript(conn.conn, sql)
 }
 
 func RunScriptFiles(ctx context.Context, db *Database, path string) error {
-	conn, err := db.Conn(ctx)
-	if err != nil {
-		return err
-	}
-	defer conn.Done()
-
 	files, err := os.ReadDir(path)
 	if err != nil {
 		return err
@@ -223,7 +206,7 @@ func RunScriptFiles(ctx context.Context, db *Database, path string) error {
 			return err
 		}
 
-		err = conn.Exec(ctx, string(sql))
+		err = RunScript(ctx, db, string(sql))
 		if err != nil {
 			return err
 		}

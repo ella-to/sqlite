@@ -16,9 +16,8 @@ func TestConnPrepareFunc(t *testing.T) {
 		sqlite.WithMemory(),
 		sqlite.WithPoolSize(10),
 		sqlite.WithConnPrepareFunc(func(conn *sqlite.Conn) error {
-			ctx := context.Background()
 
-			err := conn.Exec(ctx, `CREATE TABLE IF NOT EXISTS mytests (name TEXT);`)
+			err := conn.ExecScript(`CREATE TABLE IF NOT EXISTS mytests (name TEXT);`)
 			if err != nil {
 				return err
 			}
@@ -41,9 +40,7 @@ func TestConcurrentCalls(t *testing.T) {
 		sqlite.WithMemory(),
 		sqlite.WithPoolSize(10),
 		sqlite.WithConnPrepareFunc(func(conn *sqlite.Conn) error {
-			ctx := context.Background()
-
-			err := conn.Exec(ctx, `CREATE TABLE IF NOT EXISTS mytests (name TEXT);`)
+			err := conn.ExecScript(`CREATE TABLE IF NOT EXISTS mytests (name TEXT);`)
 			if err != nil {
 				return err
 			}
@@ -82,9 +79,7 @@ func TestConcurrentCallsInsert(t *testing.T) {
 		sqlite.WithMemory(),
 		sqlite.WithPoolSize(10),
 		sqlite.WithConnPrepareFunc(func(conn *sqlite.Conn) error {
-			ctx := context.Background()
-
-			err := conn.Exec(ctx, `CREATE TABLE IF NOT EXISTS mytests (name TEXT);`)
+			err := conn.ExecScript(`CREATE TABLE IF NOT EXISTS mytests (name TEXT);`)
 			if err != nil {
 				return err
 			}
@@ -114,6 +109,7 @@ func TestConcurrentCallsInsert(t *testing.T) {
 				stmt, err := conn.Prepare(ctx, `INSERT INTO mytests (name) VALUES (?);`, "test")
 				assert.NoError(t, err)
 				_, err = stmt.Step()
+				stmt.Finalize()
 				assert.NoError(t, err)
 				conn.Done()
 			}
@@ -132,7 +128,7 @@ func TestConcurrentCallsInsert(t *testing.T) {
 	hasRow, err := stmt.Step()
 	assert.NoError(t, err)
 	assert.True(t, hasRow)
-
 	count := stmt.GetInt64("count")
+	stmt.Finalize()
 	assert.Equal(t, int64(concurrentWorkers*totalCalls), count)
 }
