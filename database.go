@@ -72,27 +72,27 @@ func (db *Database) Close() error {
 	return db.pool.Close()
 }
 
-type OptionFunc func(*Database) error
+type OptionFunc func(context.Context, *Database) error
 
 func WithMemory() OptionFunc {
 	return WithStringConn("file::memory:?mode=memory&cache=shared")
 }
 
 func WithFile(path string) OptionFunc {
-	return func(db *Database) error {
+	return func(ctx context.Context, db *Database) error {
 		err := os.MkdirAll(filepath.Dir(path), os.ModePerm)
 		if err != nil {
 			return err
 		}
 
-		return WithStringConn("file:" + path + "?cache=shared")(db)
+		return WithStringConn("file:"+path+"?cache=shared")(ctx, db)
 	}
 }
 
 func WithStringConn(stringConn string) OptionFunc {
-	return func(db *Database) error {
+	return func(ctx context.Context, db *Database) error {
 		if db.stringConn != "" {
-			slog.Warn("stringConn changed", "old", db.stringConn, "new", stringConn)
+			slog.WarnContext(ctx, "stringConn changed", "old", db.stringConn, "new", stringConn)
 		}
 		db.stringConn = stringConn
 		return nil
@@ -100,28 +100,28 @@ func WithStringConn(stringConn string) OptionFunc {
 }
 
 func WithPoolSize(size int) OptionFunc {
-	return func(db *Database) error {
+	return func(ctx context.Context, db *Database) error {
 		db.size = size
 		return nil
 	}
 }
 
 func WithConnPrepareFunc(fn ConnPrepareFunc) OptionFunc {
-	return func(db *Database) error {
+	return func(ctx context.Context, db *Database) error {
 		db.prepareConnFn = ConnPrepareFunc(fn)
 		return nil
 	}
 }
 
 func WithFunctions(fns map[string]*FunctionImpl) OptionFunc {
-	return func(db *Database) error {
+	return func(ctx context.Context, db *Database) error {
 		db.fns = fns
 		return nil
 	}
 }
 
 // New creates a sqlite database
-func New(opts ...OptionFunc) (*Database, error) {
+func New(ctx context.Context, opts ...OptionFunc) (*Database, error) {
 	pragma := strings.TrimSpace(`
 		PRAGMA foreign_keys = ON;
 		PRAGMA journal_mode = WAL;
@@ -131,7 +131,7 @@ func New(opts ...OptionFunc) (*Database, error) {
 
 	db := &Database{}
 	for _, opt := range opts {
-		err := opt(db)
+		err := opt(ctx, db)
 		if err != nil {
 			return nil, err
 		}

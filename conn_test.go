@@ -10,9 +10,12 @@ import (
 )
 
 func TestConnPrepareFunc(t *testing.T) {
+	ctx := context.Background()
+
 	var conn *sqlite.Conn
 
 	db, err := sqlite.New(
+		ctx,
 		sqlite.WithMemory(),
 		sqlite.WithPoolSize(10),
 		sqlite.WithConnPrepareFunc(func(conn *sqlite.Conn) error {
@@ -36,7 +39,10 @@ func TestConnPrepareFunc(t *testing.T) {
 }
 
 func TestConcurrentCalls(t *testing.T) {
+	ctx := context.Background()
+
 	db, err := sqlite.New(
+		ctx,
 		sqlite.WithMemory(),
 		sqlite.WithPoolSize(10),
 		sqlite.WithConnPrepareFunc(func(conn *sqlite.Conn) error {
@@ -75,7 +81,10 @@ func TestConcurrentCalls(t *testing.T) {
 }
 
 func TestConcurrentCallsInsert(t *testing.T) {
+	ctx := context.Background()
+
 	db, err := sqlite.New(
+		ctx,
 		sqlite.WithMemory(),
 		sqlite.WithPoolSize(10),
 		sqlite.WithConnPrepareFunc(func(conn *sqlite.Conn) error {
