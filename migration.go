@@ -45,7 +45,7 @@ func Migration(ctx context.Context, db *Database, fs ReadDirFileFS, dir string) 
 	missingMigrations := detectMissingMigrations(alreadyMigratedFiles, sqlFiles)
 
 	for _, sqlFile := range missingMigrations {
-		slog.Debug("running migration sql", "file", sqlFile)
+		slog.DebugContext(ctx, "running migration sql", "file", sqlFile)
 
 		err = setMigrateFile(ctx, conn, sqlFile, fs)
 		if err != nil {

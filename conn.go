@@ -34,7 +34,7 @@ func (c *Conn) Done() {
 
 func (c *Conn) Prepare(ctx context.Context, sql string, values ...any) (*Stmt, error) {
 	if slog.Default().Enabled(ctx, slog.LevelDebug) {
-		slog.Debug("prepare sql", "sql", ShowSql(sql, values...))
+		slog.DebugContext(ctx, "prepare sql", "sql", ShowSql(sql, values...))
 	}
 
 	sql = strings.TrimSpace(sql)
