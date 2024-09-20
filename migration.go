@@ -22,6 +22,8 @@ type ReadDirFileFS interface {
 // Make sure each file name is unique and the use either a timestamp or counter to make sure
 // the files are applied in the correct order.
 func Migration(ctx context.Context, db *Database, fs ReadDirFileFS, dir string) error {
+	ctx = logger.Debug(ctx, "applying migrations", "dir", dir)
+
 	conn, err := db.Conn(ctx)
 	if err != nil {
 		return err
