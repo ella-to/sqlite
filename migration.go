@@ -3,10 +3,11 @@ package sqlite
 import (
 	"context"
 	"io/fs"
-	"log/slog"
 	"path/filepath"
 	"slices"
 	"sort"
+
+	"ella.to/logger"
 )
 
 type ReadDirFileFS interface {
@@ -45,7 +46,7 @@ func Migration(ctx context.Context, db *Database, fs ReadDirFileFS, dir string) 
 	missingMigrations := detectMissingMigrations(alreadyMigratedFiles, sqlFiles)
 
 	for _, sqlFile := range missingMigrations {
-		slog.DebugContext(ctx, "running migration sql", "file", sqlFile)
+		logger.Debug(ctx, "running migration sql", "file", sqlFile)
 
 		err = setMigrateFile(ctx, conn, sqlFile, fs)
 		if err != nil {

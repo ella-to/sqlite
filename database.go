@@ -4,12 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 
+	"ella.to/logger"
 	"zombiezen.com/go/sqlite"
 	"zombiezen.com/go/sqlite/sqlitex"
 )
@@ -92,7 +92,7 @@ func WithFile(path string) OptionFunc {
 func WithStringConn(stringConn string) OptionFunc {
 	return func(ctx context.Context, db *Database) error {
 		if db.stringConn != "" {
-			slog.WarnContext(ctx, "stringConn changed", "old", db.stringConn, "new", stringConn)
+			logger.Warn(ctx, "stringConn changed", "old", db.stringConn, "new", stringConn)
 		}
 		db.stringConn = stringConn
 		return nil
