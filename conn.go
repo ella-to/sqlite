@@ -94,7 +94,7 @@ func (c *Conn) Prepare(ctx context.Context, sql string, values ...any) (*Stmt, e
 
 		switch v := value.(type) {
 		case time.Time:
-			stmt.BindInt64(i, v.Unix())
+			stmt.BindInt64(i, v.UTC().Unix())
 		case fmt.Stringer:
 			stmt.BindText(i, v.String())
 		default:

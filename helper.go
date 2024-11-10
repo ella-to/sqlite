@@ -12,7 +12,7 @@ import (
 
 func LoadTime(stmt *Stmt, key string) time.Time {
 	value := stmt.GetInt64(key)
-	return time.Unix(value, 0)
+	return time.Unix(value, 0).UTC()
 }
 
 func LoadBool(stmt *Stmt, key string) bool {
