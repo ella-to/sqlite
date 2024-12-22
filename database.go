@@ -61,6 +61,18 @@ func (db *Database) Conn(ctx context.Context) (*Conn, error) {
 	}, nil
 }
 
+func (db *Database) Exec(ctx context.Context, fn func(ctx context.Context, conn *Conn)) error {
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Done()
+
+	fn(ctx, conn)
+
+	return nil
+}
+
 func (db *Database) put(conn *Conn) {
 	db.pool.Put(conn.conn)
 }
