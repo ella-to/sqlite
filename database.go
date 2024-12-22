@@ -61,16 +61,14 @@ func (db *Database) Conn(ctx context.Context) (*Conn, error) {
 	}, nil
 }
 
-func (db *Database) Exec(ctx context.Context, fn func(ctx context.Context, conn *Conn)) error {
+func (db *Database) Exec(ctx context.Context, fn func(ctx context.Context, conn *Conn) error) error {
 	conn, err := db.Conn(ctx)
 	if err != nil {
 		return err
 	}
 	defer conn.Done()
 
-	fn(ctx, conn)
-
-	return nil
+	return fn(ctx, conn)
 }
 
 func (db *Database) put(conn *Conn) {
