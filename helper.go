@@ -20,7 +20,7 @@ func LoadBool(stmt *Stmt, key string) bool {
 }
 
 func LoadJsonMap[T any](stmt *Stmt, col string) (map[string]T, error) {
-	var mapper map[string]T
+	mapper := make(map[string]T)
 	err := json.NewDecoder(stmt.GetReader(col)).Decode(&mapper)
 	// NOTE: we need to check for io.EOF because json.NewDecoder returns io.EOF when the input is empty
 	// this is not an error, we can just return an empty slice
@@ -31,7 +31,7 @@ func LoadJsonMap[T any](stmt *Stmt, col string) (map[string]T, error) {
 }
 
 func LoadJsonArray[T any](stmt *Stmt, col string) ([]T, error) {
-	var array []T
+	array := make([]T, 0)
 	err := json.NewDecoder(stmt.GetReader(col)).Decode(&array)
 	// NOTE: we need to check for io.EOF because json.NewDecoder returns io.EOF when the input is empty
 	// this is not an error, we can just return an empty slice
