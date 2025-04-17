@@ -47,6 +47,17 @@ func LoadJsonArray[T any](stmt *Stmt, col string) ([]T, error) {
 	return array, nil
 }
 
+func LoadJsonStruct[T any](stmt *Stmt, col string) (*T, error) {
+	var obj T
+	err := json.NewDecoder(stmt.GetReader(col)).Decode(&obj)
+	// NOTE: we need to check for io.EOF because json.NewDecoder returns io.EOF when the input is empty
+	// this is not an error, we can just return an empty obj
+	if err != nil && !errors.Is(err, io.EOF) {
+		return nil, err
+	}
+	return &obj, nil
+}
+
 // Placeholders returns a string of ? separated by commas
 func Placeholders(count int) string {
 	var sb strings.Builder
