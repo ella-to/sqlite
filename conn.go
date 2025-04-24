@@ -45,6 +45,8 @@ func (c *Conn) Prepare(ctx context.Context, sql string, values ...any) (*Stmt, e
 		return nil, fmt.Errorf("%w: %w", ErrPrepareSQL, err)
 	}
 
+	var buffer bytes.Buffer
+
 	for i, value := range values {
 		i++ // bind starts from 1
 
@@ -68,7 +70,8 @@ func (c *Conn) Prepare(ctx context.Context, sql string, values ...any) (*Stmt, e
 			}
 			fallthrough
 		case reflect.Map:
-			var buffer bytes.Buffer
+			buffer.Reset()
+			// Encode the value to JSON
 			err = json.NewEncoder(&buffer).Encode(value)
 			if err != nil {
 				return nil, err
@@ -89,6 +92,18 @@ func (c *Conn) Prepare(ctx context.Context, sql string, values ...any) (*Stmt, e
 			continue
 		case reflect.Bool:
 			stmt.BindBool(i, reflect.ValueOf(value).Bool())
+			continue
+		}
+
+		// Check for struct or pointer to struct
+		// it will be encoded to JSON Map
+		if valueType.Kind() == reflect.Struct || (valueType.Kind() == reflect.Ptr && valueType.Elem().Kind() == reflect.Struct) {
+			buffer.Reset()
+			err = json.NewEncoder(&buffer).Encode(value)
+			if err != nil {
+				return nil, err
+			}
+			stmt.BindText(i, buffer.String())
 			continue
 		}
 

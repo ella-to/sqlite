@@ -19,7 +19,6 @@ func TestConnPrepareFunc(t *testing.T) {
 		sqlite.WithMemory(),
 		sqlite.WithPoolSize(10),
 		sqlite.WithConnPrepareFunc(func(conn *sqlite.Conn) error {
-
 			err := conn.ExecScript(`CREATE TABLE IF NOT EXISTS mytests (name TEXT);`)
 			if err != nil {
 				return err
@@ -78,6 +77,106 @@ func TestConcurrentCalls(t *testing.T) {
 	}
 
 	wg.Wait()
+}
+
+func TestAddingStructToJson(t *testing.T) {
+	ctx := context.Background()
+
+	db, err := sqlite.New(
+		ctx,
+		sqlite.WithMemory(),
+		sqlite.WithPoolSize(10),
+		sqlite.WithConnPrepareFunc(func(conn *sqlite.Conn) error {
+			err := conn.ExecScript(`CREATE TABLE IF NOT EXISTS mytests (map JSON);`)
+			if err != nil {
+				return err
+			}
+
+			return nil
+		}))
+	assert.NoError(t, err)
+	t.Cleanup(func() {
+		db.Close()
+	})
+
+	type TestStruct struct {
+		Name string `json:"name"`
+		Age  int    `json:"age"`
+	}
+
+	conn, err := db.Conn(context.Background())
+	assert.NoError(t, err)
+	t.Cleanup(func() { conn.Done() })
+
+	stmt, err := conn.Prepare(ctx, `INSERT INTO mytests (map) VALUES (?);`, TestStruct{Name: "test", Age: 10})
+	assert.NoError(t, err)
+	t.Cleanup(func() { stmt.Finalize() })
+
+	_, err = stmt.Step()
+	assert.NoError(t, err)
+
+	stmt, err = conn.Prepare(ctx, `SELECT map FROM mytests;`)
+	assert.NoError(t, err)
+	hasRow, err := stmt.Step()
+
+	assert.NoError(t, err)
+	assert.True(t, hasRow)
+
+	result, err := sqlite.LoadJsonStruct[TestStruct](stmt, "map")
+	assert.NoError(t, err)
+
+	assert.Equal(t, "test", result.Name)
+	assert.Equal(t, 10, result.Age)
+}
+
+func TestAddingPointerStructToJson(t *testing.T) {
+	ctx := context.Background()
+
+	db, err := sqlite.New(
+		ctx,
+		sqlite.WithMemory(),
+		sqlite.WithPoolSize(10),
+		sqlite.WithConnPrepareFunc(func(conn *sqlite.Conn) error {
+			err := conn.ExecScript(`CREATE TABLE IF NOT EXISTS mytests (map JSON);`)
+			if err != nil {
+				return err
+			}
+
+			return nil
+		}))
+	assert.NoError(t, err)
+	t.Cleanup(func() {
+		db.Close()
+	})
+
+	type TestStruct struct {
+		Name string `json:"name"`
+		Age  int    `json:"age"`
+	}
+
+	conn, err := db.Conn(context.Background())
+	assert.NoError(t, err)
+	t.Cleanup(func() { conn.Done() })
+
+	stmt, err := conn.Prepare(ctx, `INSERT INTO mytests (map) VALUES (?);`, &TestStruct{Name: "test", Age: 10})
+	assert.NoError(t, err)
+	t.Cleanup(func() { stmt.Finalize() })
+
+	_, err = stmt.Step()
+	assert.NoError(t, err)
+
+	stmt, err = conn.Prepare(ctx, `SELECT map FROM mytests;`)
+	assert.NoError(t, err)
+	hasRow, err := stmt.Step()
+
+	assert.NoError(t, err)
+	assert.True(t, hasRow)
+
+	result, err := sqlite.LoadJsonStruct[TestStruct](stmt, "map")
+	assert.NoError(t, err)
+
+	assert.Equal(t, "test", result.Name)
+	assert.Equal(t, 10, result.Age)
 }
 
 func TestConcurrentCallsInsert(t *testing.T) {
