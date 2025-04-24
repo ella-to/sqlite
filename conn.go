@@ -95,8 +95,20 @@ func (c *Conn) Prepare(ctx context.Context, sql string, values ...any) (*Stmt, e
 			continue
 		}
 
+		switch v := value.(type) {
+		case time.Time:
+			stmt.BindInt64(i, v.UTC().Unix())
+			continue
+		case fmt.Stringer:
+			stmt.BindText(i, v.String())
+			continue
+		}
+
 		// Check for struct or pointer to struct
 		// it will be encoded to JSON Map
+		//
+		// NOTE: this should be the last check as time.Time is also a struct
+		// and we need to make sure we don't encode it to JSON
 		if valueType.Kind() == reflect.Struct || (valueType.Kind() == reflect.Ptr && valueType.Elem().Kind() == reflect.Struct) {
 			buffer.Reset()
 			err = json.NewEncoder(&buffer).Encode(value)
@@ -107,14 +119,7 @@ func (c *Conn) Prepare(ctx context.Context, sql string, values ...any) (*Stmt, e
 			continue
 		}
 
-		switch v := value.(type) {
-		case time.Time:
-			stmt.BindInt64(i, v.UTC().Unix())
-		case fmt.Stringer:
-			stmt.BindText(i, v.String())
-		default:
-			return nil, ErrUnknownType
-		}
+		return nil, ErrUnknownType
 	}
 
 	return stmt, nil
