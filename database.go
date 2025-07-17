@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 
 	"ella.to/logger"
 	"zombiezen.com/go/sqlite"
@@ -23,11 +22,13 @@ var (
 
 // Reason behind this is that I don't want to import two packages that
 // starts with sqlite into my project. I can use the type alias in my project
-type Stmt = sqlite.Stmt
-type FunctionImpl = sqlite.FunctionImpl
-type Context = sqlite.Context
-type Value = sqlite.Value
-type AggregateFunction = sqlite.AggregateFunction
+type (
+	Stmt              = sqlite.Stmt
+	FunctionImpl      = sqlite.FunctionImpl
+	Context           = sqlite.Context
+	Value             = sqlite.Value
+	AggregateFunction = sqlite.AggregateFunction
+)
 
 type ConnPrepareFunc func(*Conn) error
 
@@ -132,12 +133,12 @@ func WithFunctions(fns map[string]*FunctionImpl) OptionFunc {
 
 // New creates a sqlite database
 func New(ctx context.Context, opts ...OptionFunc) (*Database, error) {
-	pragma := strings.TrimSpace(`
-		PRAGMA foreign_keys = ON;
-		PRAGMA journal_mode = WAL;
-		PRAGMA cache_size = -2000;  -- Use negative value for KB size (here, 2MB)
-		PRAGMA temp_store = MEMORY;
-	`)
+	pragmas := []string{
+		`PRAGMA foreign_keys = ON;`,
+		`PRAGMA journal_mode = WAL;`,
+		`PRAGMA cache_size = -2000;`, // Use negative value for KB size (here, 2MB)
+		`PRAGMA temp_store = MEMORY;`,
+	}
 
 	db := &Database{}
 	for _, opt := range opts {
@@ -153,9 +154,11 @@ func New(ctx context.Context, opts ...OptionFunc) (*Database, error) {
 			Flags:    0,
 			PoolSize: db.size,
 			PrepareConn: func(conn *sqlite.Conn) error {
-				err := sqlitex.ExecScript(conn, pragma)
-				if err != nil {
-					return err
+				for _, pragma := range pragmas {
+					err := sqlitex.ExecuteTransient(conn, pragma, nil)
+					if err != nil {
+						return err
+					}
 				}
 
 				if db.prepareConnFn != nil {
