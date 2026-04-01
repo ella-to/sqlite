@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"ella.to/logger"
 	"zombiezen.com/go/sqlite"
 	"zombiezen.com/go/sqlite/sqlitex"
 )
@@ -35,7 +34,7 @@ func (c *Conn) Done() {
 
 func (c *Conn) Prepare(ctx context.Context, sql string, values ...any) (*Stmt, error) {
 	if slog.Default().Enabled(ctx, slog.LevelDebug) {
-		logger.Debug(ctx, "prepare sql", "sql", ShowSql(sql, values...))
+		slog.DebugContext(ctx, "prepare sql", "sql", ShowSql(sql, values...))
 	}
 
 	sql = strings.TrimSpace(sql)

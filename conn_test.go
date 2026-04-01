@@ -110,7 +110,7 @@ func TestAddingStructToJson(t *testing.T) {
 
 	stmt, err := conn.Prepare(ctx, `INSERT INTO mytests (map) VALUES (?);`, TestStruct{Name: "test", Age: 10})
 	assert.NoError(t, err)
-	t.Cleanup(func() { stmt.Finalize() })
+	t.Cleanup(func() { _ = stmt.Finalize() })
 
 	_, err = stmt.Step()
 	assert.NoError(t, err)
@@ -160,7 +160,7 @@ func TestAddingPointerStructToJson(t *testing.T) {
 
 	stmt, err := conn.Prepare(ctx, `INSERT INTO mytests (map) VALUES (?);`, &TestStruct{Name: "test", Age: 10})
 	assert.NoError(t, err)
-	t.Cleanup(func() { stmt.Finalize() })
+	t.Cleanup(func() { _ = stmt.Finalize() })
 
 	_, err = stmt.Step()
 	assert.NoError(t, err)
@@ -217,7 +217,7 @@ func TestConcurrentCallsInsert(t *testing.T) {
 				stmt, err := conn.Prepare(ctx, `INSERT INTO mytests (name) VALUES (?);`, "test")
 				assert.NoError(t, err)
 				_, err = stmt.Step()
-				stmt.Finalize()
+				_ = stmt.Finalize()
 				assert.NoError(t, err)
 				conn.Done()
 			}
@@ -237,6 +237,6 @@ func TestConcurrentCallsInsert(t *testing.T) {
 	assert.NoError(t, err)
 	assert.True(t, hasRow)
 	count := stmt.GetInt64("count")
-	stmt.Finalize()
+	_ = stmt.Finalize()
 	assert.Equal(t, int64(concurrentWorkers*totalCalls), count)
 }
