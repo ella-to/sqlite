@@ -29,6 +29,10 @@ func (c *Conn) Save(err *error) {
 
 // Done returns the connection back to the pool
 func (c *Conn) Done() {
+	if c == nil || c.put == nil {
+		return
+	}
+
 	c.put(c)
 }
 

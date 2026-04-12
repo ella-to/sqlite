@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"sync"
 
 	"zombiezen.com/go/sqlite"
 	"zombiezen.com/go/sqlite/sqlitex"
@@ -140,6 +141,8 @@ func New(ctx context.Context, opts ...OptionFunc) (*Database, error) {
 		`PRAGMA temp_store = MEMORY;`,
 	}
 
+	var prepareConnMu sync.Mutex
+
 	db := &Database{}
 	for _, opt := range opts {
 		err := opt(ctx, db)
@@ -154,6 +157,9 @@ func New(ctx context.Context, opts ...OptionFunc) (*Database, error) {
 			Flags:    0,
 			PoolSize: db.size,
 			PrepareConn: func(conn *sqlite.Conn) error {
+				prepareConnMu.Lock()
+				defer prepareConnMu.Unlock()
+
 				for _, pragma := range pragmas {
 					err := sqlitex.ExecuteTransient(conn, pragma, nil)
 					if err != nil {
