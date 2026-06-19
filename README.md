@@ -19,7 +19,7 @@
 ## Installation
 
 ```bash
-go get ella.to/sqlite@v0.2.14
+go get ella.to/sqlite@v0.2.15
 ```
 
 ## Opening a Database
