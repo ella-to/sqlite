@@ -17,7 +17,9 @@ import (
 
 type Conn struct {
 	conn *sqlite.Conn
-	put  func(conn *Conn)
+	// pool the connection goes back to on Done; nil for connections that are
+	// not checked out of a pool (the WithConnPrepareFunc argument)
+	pool *sqlitex.Pool
 }
 
 // Save opens a savepoint immediately and returns the function that releases
@@ -45,13 +47,16 @@ func (c *Conn) Immediate() (func(*error), error) {
 	return sqlitex.ImmediateTransaction(c.conn)
 }
 
-// Done returns the connection back to the pool
+// Done returns the connection back to the pool. Calling it more than once
+// is a no-op.
 func (c *Conn) Done() {
-	if c == nil || c.put == nil {
+	if c == nil || c.pool == nil {
 		return
 	}
 
-	c.put(c)
+	pool := c.pool
+	c.pool = nil
+	pool.Put(c.conn)
 }
 
 // Prepare compiles sql (or reuses the copy this connection cached for the

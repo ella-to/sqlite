@@ -78,7 +78,7 @@ func (db *Database) Conn(ctx context.Context) (*Conn, error) {
 
 	return &Conn{
 		conn: conn,
-		put:  db.put,
+		pool: db.pool,
 	}, nil
 }
 
@@ -92,14 +92,6 @@ func (db *Database) Exec(ctx context.Context, fn func(ctx context.Context, conn 
 	return fn(ctx, conn)
 }
 
-func (db *Database) put(conn *Conn) {
-	db.pool.Put(conn.conn)
-}
-
-func (db *Database) putWrite(conn *Conn) {
-	db.writePool.Put(conn.conn)
-}
-
 // Write runs fn on the database's single writer connection inside a
 // BEGIN IMMEDIATE transaction. The transaction commits when fn returns nil
 // and rolls back when it returns an error or panics. Concurrent Write calls
@@ -110,7 +102,7 @@ func (db *Database) Write(ctx context.Context, fn func(ctx context.Context, conn
 	if err != nil {
 		return err
 	}
-	conn := &Conn{conn: raw, put: db.putWrite}
+	conn := &Conn{conn: raw, pool: db.writePool}
 	defer conn.Done()
 
 	end, err := conn.Immediate()
@@ -318,7 +310,7 @@ func New(ctx context.Context, opts ...OptionFunc) (*Database, error) {
 		}
 
 		if db.prepareConnFn != nil {
-			return db.prepareConnFn(&Conn{conn: conn, put: func(conn *Conn) {}})
+			return db.prepareConnFn(&Conn{conn: conn})
 		}
 
 		return nil

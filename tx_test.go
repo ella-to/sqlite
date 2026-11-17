@@ -121,3 +121,14 @@ func TestLoadBoolNonZero(t *testing.T) {
 	assert.True(t, sqlite.LoadBool(stmt, "t3"))
 	require.NoError(t, stmt.Reset())
 }
+
+func TestConnDoneTwice(t *testing.T) {
+	db := newFileDB(t, sqlite.WithPoolSize(1))
+	conn, err := db.Conn(context.Background())
+	require.NoError(t, err)
+	conn.Done()
+	conn.Done()
+	conn, err = db.Conn(context.Background())
+	require.NoError(t, err)
+	conn.Done()
+}
