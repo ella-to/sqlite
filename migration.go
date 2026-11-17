@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"context"
+	"fmt"
 	"io/fs"
 	"log/slog"
 	"path/filepath"
@@ -94,32 +95,25 @@ func loadAlreadyMigratedFiles(ctx context.Context, conn *Conn) ([]string, error)
 }
 
 func setMigrateFile(ctx context.Context, conn *Conn, filename string, fs ReadDirFileFS) (err error) {
-	defer conn.Save()(&err)
-
-	err = func() error {
-		stmt, err := conn.Prepare(ctx, `INSERT INTO migrations_sqlite (filename) VALUES (?);`, filename)
-		if err != nil {
-			return err
-		}
-
-		_, err = stmt.Step()
-		if err != nil {
-			return err
-		}
-
-		return nil
-	}()
-	if err != nil {
-		return err
-	}
-
 	content, err := fs.ReadFile(filename)
 	if err != nil {
 		return err
 	}
 
-	err = conn.ExecScript(string(content))
+	// the script and the bookkeeping row commit or roll back together; the
+	// script runs first so a failing migration is never recorded as applied
+	defer conn.Save()(&err)
+
+	if err = conn.ExecScript(string(content)); err != nil {
+		return fmt.Errorf("migration %s: %w", filename, err)
+	}
+
+	stmt, err := conn.Prepare(ctx, `INSERT INTO migrations_sqlite (filename) VALUES (?);`, filename)
 	if err != nil {
+		return err
+	}
+
+	if _, err = stmt.Step(); err != nil {
 		return err
 	}
 
