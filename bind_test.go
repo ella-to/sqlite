@@ -111,3 +111,25 @@ func TestBindUnknownType(t *testing.T) {
 	_, err = conn.Prepare(ctx, "SELECT ?;", make(chan int))
 	assert.ErrorIs(t, err, sqlite.ErrUnknownType)
 }
+
+func TestPrepareTransient(t *testing.T) {
+	ctx := context.Background()
+	db := newFileDB(t)
+	conn, err := db.Conn(ctx)
+	require.NoError(t, err)
+	defer conn.Done()
+
+	stmt, err := conn.PrepareTransient(ctx, "SELECT ? + ? AS s;", 1, 2)
+	require.NoError(t, err)
+	hasRow, err := stmt.Step()
+	require.NoError(t, err)
+	require.True(t, hasRow)
+	assert.Equal(t, int64(3), stmt.GetInt64("s"))
+	require.NoError(t, stmt.Finalize())
+
+	_, err = conn.PrepareTransient(ctx, "SELECT 1; SELECT 2;")
+	assert.ErrorIs(t, err, sqlite.ErrPrepareSQL)
+
+	_, err = conn.PrepareTransient(ctx, "SELECT ?;", make(chan int))
+	assert.ErrorIs(t, err, sqlite.ErrUnknownType)
+}

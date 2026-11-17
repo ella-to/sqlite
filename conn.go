@@ -54,28 +54,70 @@ func (c *Conn) Done() {
 	c.put(c)
 }
 
+// Prepare compiles sql (or reuses the copy this connection cached for the
+// exact same string), binds values by position and returns the statement.
+//
+// Cached statements live as long as the connection, so pass a fixed set of
+// SQL strings here. SQL assembled at runtime (Sql, Placeholders with a
+// varying count, ...) grows that cache without bound: use PrepareTransient
+// for it instead.
+//
+// A statement that has not been stepped until it returned false must be
+// Reset before the connection is returned with Done, otherwise the pool
+// panics on the still-active statement.
 func (c *Conn) Prepare(ctx context.Context, sql string, values ...any) (*Stmt, error) {
 	if slog.Default().Enabled(ctx, slog.LevelDebug) {
 		slog.DebugContext(ctx, "prepare sql", "sql", ShowSql(sql, values...))
 	}
 
-	sql = strings.TrimSpace(sql)
-
-	stmt, err := c.conn.Prepare(sql)
+	stmt, err := c.conn.Prepare(strings.TrimSpace(sql))
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrPrepareSQL, err)
 	}
 
-	var buffer bytes.Buffer
-
-	for i, value := range values {
-		// bind starts from 1
-		if err := bindValue(stmt, i+1, value, &buffer); err != nil {
-			return nil, err
-		}
+	if err := bindValues(stmt, values); err != nil {
+		return nil, err
 	}
 
 	return stmt, nil
+}
+
+// PrepareTransient is Prepare without the per-connection statement cache,
+// meant for SQL built at runtime. The caller owns the statement and must
+// call Finalize on it when done.
+func (c *Conn) PrepareTransient(ctx context.Context, sql string, values ...any) (*Stmt, error) {
+	if slog.Default().Enabled(ctx, slog.LevelDebug) {
+		slog.DebugContext(ctx, "prepare transient sql", "sql", ShowSql(sql, values...))
+	}
+
+	sql = strings.TrimSpace(sql)
+
+	stmt, trailingBytes, err := c.conn.PrepareTransient(sql)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrPrepareSQL, err)
+	}
+	if trailingBytes != 0 {
+		_ = stmt.Finalize()
+		return nil, fmt.Errorf("%w: statement has trailing bytes: %q", ErrPrepareSQL, sql)
+	}
+
+	if err := bindValues(stmt, values); err != nil {
+		_ = stmt.Finalize()
+		return nil, err
+	}
+
+	return stmt, nil
+}
+
+func bindValues(stmt *Stmt, values []any) error {
+	var buffer bytes.Buffer
+	for i, value := range values {
+		// bind starts from 1
+		if err := bindValue(stmt, i+1, value, &buffer); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Use this function to execute a script that contains multiple SQL statements

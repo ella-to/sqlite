@@ -103,6 +103,18 @@ stmt, err := conn.Prepare(ctx, "SELECT * FROM users WHERE id = ? AND active = ?"
 
 Pointers bind as the value they point to (`*string` is TEXT, `*time.Time` is an INTEGER timestamp, `*Struct` is JSON). Unsigned values above `math.MaxInt64` return `ErrIntegerOverflow` instead of wrapping negative.
 
+Statements from `Prepare` are cached per connection, keyed by the SQL string. If you stop stepping a statement before it returns `false`, call `stmt.Reset()` before `conn.Done()`; the pool panics on a connection that still has an active statement.
+
+For SQL built at runtime (for example with a varying number of `Placeholders`), use `PrepareTransient` so the cache does not grow without bound. You own the statement and must finalize it:
+
+```go
+stmt, err := conn.PrepareTransient(ctx, "SELECT * FROM users WHERE id IN ("+sqlite.Placeholders(len(ids))+")", ids...)
+if err != nil {
+    return err
+}
+defer stmt.Finalize()
+```
+
 ### Using the Exec Helper
 
 For one-off operations where you don't need to manage the connection yourself:
