@@ -48,7 +48,7 @@ func TestMigrationNestedDir(t *testing.T) {
 	fsys := fstest.MapFS{
 		"db/migrations/002.sql": {Data: []byte("INSERT INTO a (v) VALUES (2);")},
 		"db/migrations/001.sql": {Data: []byte("CREATE TABLE a (v INTEGER);")},
-		"db/migrations/readme": {Data: []byte("not sql")},
+		"db/migrations/readme":  {Data: []byte("not sql")},
 	}
 	require.NoError(t, sqlite.Migration(ctx, db, fsys, "db/migrations"))
 	conn, err := db.Conn(ctx)

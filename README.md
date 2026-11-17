@@ -98,8 +98,10 @@ stmt, err := conn.Prepare(ctx, "SELECT * FROM users WHERE id = ? AND active = ?"
 | `bool` | INTEGER (0/1) |
 | `[]byte`, `json.RawMessage` | BLOB |
 | `time.Time` | INTEGER (Unix timestamp) |
-| `nil` | NULL |
+| `nil`, nil pointers | NULL |
 | maps, slices, structs | TEXT (JSON-encoded) |
+
+Pointers bind as the value they point to (`*string` is TEXT, `*time.Time` is an INTEGER timestamp, `*Struct` is JSON). Unsigned values above `math.MaxInt64` return `ErrIntegerOverflow` instead of wrapping negative.
 
 ### Using the Exec Helper
 
@@ -245,6 +247,7 @@ sqlite.ErrNotFound    // row not found
 sqlite.ErrPrepareSQL  // failed to prepare statement
 sqlite.ErrExecSQL     // failed to execute statement
 sqlite.ErrUnknownType // unsupported Go type for parameter binding
+sqlite.ErrIntegerOverflow // unsigned value does not fit in a signed 64-bit INTEGER
 ```
 
 ## License

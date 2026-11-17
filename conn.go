@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
 	"reflect"
 	"strings"
 	"time"
@@ -68,78 +69,10 @@ func (c *Conn) Prepare(ctx context.Context, sql string, values ...any) (*Stmt, e
 	var buffer bytes.Buffer
 
 	for i, value := range values {
-		i++ // bind starts from 1
-
-		if value == nil {
-			stmt.BindNull(i)
-			continue
+		// bind starts from 1
+		if err := bindValue(stmt, i+1, value, &buffer); err != nil {
+			return nil, err
 		}
-
-		valueType := reflect.TypeOf(value)
-
-		switch valueType.Kind() {
-		case reflect.Slice:
-			if valueType.Elem().Kind() == reflect.Uint8 {
-				blob, ok := value.([]byte)
-				if !ok {
-					blob = value.(json.RawMessage)
-				}
-				stmt.BindZeroBlob(i, int64(len(blob)))
-				stmt.BindBytes(i, blob)
-				continue
-			}
-			fallthrough
-		case reflect.Map:
-			buffer.Reset()
-			// Encode the value to JSON
-			err = json.NewEncoder(&buffer).Encode(value)
-			if err != nil {
-				return nil, err
-			}
-			stmt.BindText(i, buffer.String())
-			continue
-		case reflect.String:
-			stmt.BindText(i, reflect.ValueOf(value).String())
-			continue
-		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-			stmt.BindInt64(i, reflect.ValueOf(value).Int())
-			continue
-		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-			stmt.BindInt64(i, int64(reflect.ValueOf(value).Uint()))
-			continue
-		case reflect.Float32, reflect.Float64:
-			stmt.BindFloat(i, reflect.ValueOf(value).Float())
-			continue
-		case reflect.Bool:
-			stmt.BindBool(i, reflect.ValueOf(value).Bool())
-			continue
-		}
-
-		switch v := value.(type) {
-		case time.Time:
-			stmt.BindInt64(i, v.UTC().Unix())
-			continue
-		case fmt.Stringer:
-			stmt.BindText(i, v.String())
-			continue
-		}
-
-		// Check for struct or pointer to struct
-		// it will be encoded to JSON Map
-		//
-		// NOTE: this should be the last check as time.Time is also a struct
-		// and we need to make sure we don't encode it to JSON
-		if valueType.Kind() == reflect.Struct || (valueType.Kind() == reflect.Ptr && valueType.Elem().Kind() == reflect.Struct) {
-			buffer.Reset()
-			err = json.NewEncoder(&buffer).Encode(value)
-			if err != nil {
-				return nil, err
-			}
-			stmt.BindText(i, buffer.String())
-			continue
-		}
-
-		return nil, ErrUnknownType
 	}
 
 	return stmt, nil
@@ -148,4 +81,96 @@ func (c *Conn) Prepare(ctx context.Context, sql string, values ...any) (*Stmt, e
 // Use this function to execute a script that contains multiple SQL statements
 func (c *Conn) ExecScript(sql string) error {
 	return sqlitex.ExecScript(c.conn, strings.TrimSpace(sql))
+}
+
+var timeType = reflect.TypeOf(time.Time{})
+
+// bindValue binds one Go value to the 1-based parameter i of stmt.
+func bindValue(stmt *Stmt, i int, value any, buffer *bytes.Buffer) error {
+	if value == nil {
+		stmt.BindNull(i)
+		return nil
+	}
+
+	rv := reflect.ValueOf(value)
+	valueType := rv.Type()
+
+	if valueType.Kind() == reflect.Pointer {
+		// a nil pointer is SQL NULL, never the JSON text "null"
+		if rv.IsNil() {
+			stmt.BindNull(i)
+			return nil
+		}
+		elem := rv.Elem()
+		if elem.Type() == timeType {
+			// *time.Time binds like time.Time (Unix seconds), not via String()
+			return bindValue(stmt, i, elem.Interface(), buffer)
+		}
+		if v, ok := value.(fmt.Stringer); ok {
+			stmt.BindText(i, v.String())
+			return nil
+		}
+		if elem.Kind() == reflect.Struct && elem.Type() != timeType {
+			return bindJSON(stmt, i, value, buffer)
+		}
+		// pointers to scalars (and *time.Time) bind as the value they point to
+		return bindValue(stmt, i, elem.Interface(), buffer)
+	}
+
+	switch valueType.Kind() {
+	case reflect.Slice:
+		if valueType.Elem().Kind() == reflect.Uint8 {
+			stmt.BindZeroBlob(i, int64(rv.Len()))
+			stmt.BindBytes(i, rv.Bytes())
+			return nil
+		}
+		return bindJSON(stmt, i, value, buffer)
+	case reflect.Map:
+		return bindJSON(stmt, i, value, buffer)
+	case reflect.String:
+		stmt.BindText(i, rv.String())
+		return nil
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		stmt.BindInt64(i, rv.Int())
+		return nil
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+		u := rv.Uint()
+		if u > math.MaxInt64 {
+			return fmt.Errorf("%w: parameter %d value %d", ErrIntegerOverflow, i, u)
+		}
+		stmt.BindInt64(i, int64(u))
+		return nil
+	case reflect.Float32, reflect.Float64:
+		stmt.BindFloat(i, rv.Float())
+		return nil
+	case reflect.Bool:
+		stmt.BindBool(i, rv.Bool())
+		return nil
+	}
+
+	switch v := value.(type) {
+	case time.Time:
+		stmt.BindInt64(i, v.UTC().Unix())
+		return nil
+	case fmt.Stringer:
+		stmt.BindText(i, v.String())
+		return nil
+	}
+
+	// NOTE: this must stay after the time.Time check, time.Time is a struct
+	// too and must not be encoded to JSON
+	if valueType.Kind() == reflect.Struct {
+		return bindJSON(stmt, i, value, buffer)
+	}
+
+	return ErrUnknownType
+}
+
+func bindJSON(stmt *Stmt, i int, value any, buffer *bytes.Buffer) error {
+	buffer.Reset()
+	if err := json.NewEncoder(buffer).Encode(value); err != nil {
+		return err
+	}
+	stmt.BindText(i, buffer.String())
+	return nil
 }

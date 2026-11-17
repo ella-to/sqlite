@@ -20,6 +20,9 @@ var (
 	ErrPrepareSQL  = errors.New("database failed to prepare sql")
 	ErrExecSQL     = errors.New("database failed to exec sql")
 	ErrUnknownType = errors.New("database failed to prepare sql because of unknown type")
+	// ErrIntegerOverflow is returned when an unsigned value does not fit in
+	// SQLite's signed 64-bit INTEGER.
+	ErrIntegerOverflow = errors.New("database value overflows a signed 64-bit integer")
 )
 
 // Reason behind this is that I don't want to import two packages that
