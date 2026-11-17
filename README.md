@@ -37,8 +37,12 @@ Every new connection gets these PRAGMAs applied automatically:
 - `foreign_keys = ON`
 - `journal_mode = WAL`
 - `synchronous = NORMAL` (change with `WithSynchronous(sqlite.SynchronousFull)` if every commit must survive power loss)
-- `cache_size = -2000` (2 MB)
+- `cache_size = -16384` (16 MiB per connection, change with `WithCacheSize`)
 - `temp_store = MEMORY`
+- `mmap_size = 268435456` (256 MiB, change with `WithMmapSize`, 0 disables)
+- `journal_size_limit = 67108864` (the WAL is truncated back to 64 MiB after checkpoints)
+
+`Close` runs `PRAGMA optimize` on one connection before closing the pool.
 
 ### In-Memory Database
 

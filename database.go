@@ -10,6 +10,7 @@ import (
 	"sort"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"zombiezen.com/go/sqlite"
 	"zombiezen.com/go/sqlite/sqlitex"
@@ -43,6 +44,12 @@ func Sql(sql string, values ...any) string {
 	return fmt.Sprintf(sql, values...)
 }
 
+const (
+	defaultCacheSizeKiB     = 16 * 1024
+	defaultMmapSize         = 256 << 20
+	defaultJournalSizeLimit = 64 << 20
+)
+
 // Database struct which holds pool of connection
 type Database struct {
 	stringConn    string
@@ -51,6 +58,9 @@ type Database struct {
 	prepareConnFn ConnPrepareFunc
 	fns           map[string]*FunctionImpl
 	synchronous   string
+	cacheSizeKiB  int
+	mmapSize      int64
+	closed        atomic.Bool
 }
 
 // Conn returns one connection from connection pool
@@ -85,8 +95,31 @@ func (db *Database) put(conn *Conn) {
 // Close closes all the connections in the pool
 // and returns error if any connection fails to close
 // NOTE: make sure to call this function at the end of your application
+// Calling Close more than once is a no-op.
 func (db *Database) Close() error {
+	if db.closed.Swap(true) {
+		return nil
+	}
+	db.optimize()
 	return db.pool.Close()
+}
+
+// optimize runs PRAGMA optimize on one idle connection, as SQLite recommends
+// before closing a long-lived database. It is best effort: it gives up if no
+// connection becomes free quickly.
+func (db *Database) optimize() {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	conn, err := db.pool.Take(ctx)
+	if err != nil {
+		return
+	}
+	defer db.pool.Put(conn)
+
+	if err := sqlitex.ExecuteTransient(conn, `PRAGMA optimize;`, nil); err != nil {
+		slog.Debug("sqlite: PRAGMA optimize failed", "error", err)
+	}
 }
 
 type OptionFunc func(context.Context, *Database) error
@@ -156,6 +189,30 @@ func WithSynchronous(mode string) OptionFunc {
 	}
 }
 
+// WithCacheSize sets the page cache size of every connection, in KiB.
+// The default is 16 MiB per connection.
+func WithCacheSize(kib int) OptionFunc {
+	return func(ctx context.Context, db *Database) error {
+		if kib <= 0 {
+			return fmt.Errorf("invalid cache size %d KiB", kib)
+		}
+		db.cacheSizeKiB = kib
+		return nil
+	}
+}
+
+// WithMmapSize sets PRAGMA mmap_size, the number of bytes of the database
+// file read through memory mapping. The default is 256 MiB; 0 disables it.
+func WithMmapSize(bytes int64) OptionFunc {
+	return func(ctx context.Context, db *Database) error {
+		if bytes < 0 {
+			return fmt.Errorf("invalid mmap size %d", bytes)
+		}
+		db.mmapSize = bytes
+		return nil
+	}
+}
+
 func WithConnPrepareFunc(fn ConnPrepareFunc) OptionFunc {
 	return func(ctx context.Context, db *Database) error {
 		db.prepareConnFn = ConnPrepareFunc(fn)
@@ -175,7 +232,9 @@ func New(ctx context.Context, opts ...OptionFunc) (*Database, error) {
 	var prepareConnMu sync.Mutex
 
 	db := &Database{
-		synchronous: SynchronousNormal,
+		synchronous:  SynchronousNormal,
+		cacheSizeKiB: defaultCacheSizeKiB,
+		mmapSize:     defaultMmapSize,
 	}
 	for _, opt := range opts {
 		err := opt(ctx, db)
@@ -192,8 +251,13 @@ func New(ctx context.Context, opts ...OptionFunc) (*Database, error) {
 		// in WAL mode FULL fsyncs the WAL on every commit, NORMAL only at
 		// checkpoints
 		`PRAGMA synchronous = ` + db.synchronous + `;`,
-		`PRAGMA cache_size = -2000;`, // Use negative value for KB size (here, 2MB)
+		// a negative value is a size in KiB
+		fmt.Sprintf(`PRAGMA cache_size = -%d;`, db.cacheSizeKiB),
 		`PRAGMA temp_store = MEMORY;`,
+		fmt.Sprintf(`PRAGMA mmap_size = %d;`, db.mmapSize),
+		// truncate the WAL back to this size after checkpoints instead of
+		// letting it keep its high-water mark forever
+		fmt.Sprintf(`PRAGMA journal_size_limit = %d;`, defaultJournalSizeLimit),
 	}
 
 	pool, err := sqlitex.NewPool(

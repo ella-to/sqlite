@@ -30,3 +30,20 @@ func TestSynchronousDefaultsToNormal(t *testing.T) {
 	_, err := sqlite.New(context.Background(), sqlite.WithMemory(), sqlite.WithSynchronous("fast"))
 	assert.Error(t, err)
 }
+
+func TestDefaultPragmas(t *testing.T) {
+	db := newFileDB(t)
+	assert.Equal(t, int64(-16*1024), pragmaInt(t, db, "cache_size"))
+	assert.Equal(t, int64(256<<20), pragmaInt(t, db, "mmap_size"))
+	assert.Equal(t, int64(64<<20), pragmaInt(t, db, "journal_size_limit"))
+
+	db = newFileDB(t, sqlite.WithCacheSize(1024), sqlite.WithMmapSize(0))
+	assert.Equal(t, int64(-1024), pragmaInt(t, db, "cache_size"))
+	assert.Equal(t, int64(0), pragmaInt(t, db, "mmap_size"))
+}
+
+func TestCloseRunsOptimize(t *testing.T) {
+	db := newFileDB(t)
+	require.NoError(t, sqlite.RunScript(context.Background(), db, "CREATE TABLE t (v INTEGER); CREATE INDEX t_v ON t (v);"))
+	require.NoError(t, db.Close())
+}
