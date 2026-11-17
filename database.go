@@ -50,6 +50,7 @@ type Database struct {
 	size          int
 	prepareConnFn ConnPrepareFunc
 	fns           map[string]*FunctionImpl
+	synchronous   string
 }
 
 // Conn returns one connection from connection pool
@@ -131,6 +132,30 @@ func WithPoolSize(size int) OptionFunc {
 	}
 }
 
+// Values accepted by WithSynchronous, see https://sqlite.org/pragma.html#pragma_synchronous
+const (
+	SynchronousOff    = "OFF"
+	SynchronousNormal = "NORMAL"
+	SynchronousFull   = "FULL"
+	SynchronousExtra  = "EXTRA"
+)
+
+// WithSynchronous sets PRAGMA synchronous on every connection. The default
+// is NORMAL: in WAL mode it cannot corrupt the database, but the most recent
+// commits can be lost on power loss (not on an application crash). Use FULL
+// when every acknowledged commit must survive power loss.
+func WithSynchronous(mode string) OptionFunc {
+	return func(ctx context.Context, db *Database) error {
+		switch mode {
+		case SynchronousOff, SynchronousNormal, SynchronousFull, SynchronousExtra:
+			db.synchronous = mode
+			return nil
+		default:
+			return fmt.Errorf("invalid synchronous mode %q", mode)
+		}
+	}
+}
+
 func WithConnPrepareFunc(fn ConnPrepareFunc) OptionFunc {
 	return func(ctx context.Context, db *Database) error {
 		db.prepareConnFn = ConnPrepareFunc(fn)
@@ -147,21 +172,28 @@ func WithFunctions(fns map[string]*FunctionImpl) OptionFunc {
 
 // New creates a sqlite database
 func New(ctx context.Context, opts ...OptionFunc) (*Database, error) {
-	pragmas := []string{
-		`PRAGMA foreign_keys = ON;`,
-		`PRAGMA journal_mode = WAL;`,
-		`PRAGMA cache_size = -2000;`, // Use negative value for KB size (here, 2MB)
-		`PRAGMA temp_store = MEMORY;`,
-	}
-
 	var prepareConnMu sync.Mutex
 
-	db := &Database{}
+	db := &Database{
+		synchronous: SynchronousNormal,
+	}
 	for _, opt := range opts {
 		err := opt(ctx, db)
 		if err != nil {
 			return nil, err
 		}
+	}
+
+	// NOTE: these run outside any transaction on purpose, journal_mode and
+	// synchronous cannot be changed inside one
+	pragmas := []string{
+		`PRAGMA foreign_keys = ON;`,
+		`PRAGMA journal_mode = WAL;`,
+		// in WAL mode FULL fsyncs the WAL on every commit, NORMAL only at
+		// checkpoints
+		`PRAGMA synchronous = ` + db.synchronous + `;`,
+		`PRAGMA cache_size = -2000;`, // Use negative value for KB size (here, 2MB)
+		`PRAGMA temp_store = MEMORY;`,
 	}
 
 	pool, err := sqlitex.NewPool(

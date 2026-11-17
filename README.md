@@ -36,6 +36,7 @@ Every new connection gets these PRAGMAs applied automatically:
 
 - `foreign_keys = ON`
 - `journal_mode = WAL`
+- `synchronous = NORMAL` (change with `WithSynchronous(sqlite.SynchronousFull)` if every commit must survive power loss)
 - `cache_size = -2000` (2 MB)
 - `temp_store = MEMORY`
 
