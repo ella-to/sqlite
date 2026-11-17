@@ -86,3 +86,21 @@ func TestSaveCommitsOnSuccess(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), countRows(t, conn, "t"))
 }
+
+func TestMemoryDatabasesAreIsolated(t *testing.T) {
+	ctx := context.Background()
+	a, err := sqlite.New(ctx, sqlite.WithMemory(), sqlite.WithPoolSize(1))
+	require.NoError(t, err)
+	defer a.Close()
+	b, err := sqlite.New(ctx, sqlite.WithMemory(), sqlite.WithPoolSize(1))
+	require.NoError(t, err)
+	defer b.Close()
+
+	require.NoError(t, sqlite.RunScript(ctx, a, "CREATE TABLE only_in_a (v INTEGER);"))
+
+	conn, err := b.Conn(ctx)
+	require.NoError(t, err)
+	defer conn.Done()
+	_, err = conn.Prepare(ctx, "SELECT * FROM only_in_a;")
+	assert.Error(t, err)
+}

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"sync"
+	"sync/atomic"
 
 	"zombiezen.com/go/sqlite"
 	"zombiezen.com/go/sqlite/sqlitex"
@@ -86,8 +87,17 @@ func (db *Database) Close() error {
 
 type OptionFunc func(context.Context, *Database) error
 
+// memoryDBCounter gives every in-memory database its own name, so two
+// databases created with WithMemory in one process do not share state.
+var memoryDBCounter atomic.Int64
+
+// WithMemory uses a private in-memory database. All connections of the pool
+// share it; other Database values do not.
 func WithMemory() OptionFunc {
-	return WithStringConn("file::memory:?mode=memory&cache=shared")
+	return func(ctx context.Context, db *Database) error {
+		name := fmt.Sprintf("file:memdb%d?mode=memory&cache=shared", memoryDBCounter.Add(1))
+		return WithStringConn(name)(ctx, db)
+	}
 }
 
 func WithFile(path string) OptionFunc {
