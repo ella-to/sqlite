@@ -48,3 +48,11 @@ func TestGroupPlaceholders(t *testing.T) {
 		}
 	}
 }
+
+func TestShowSqlKeepsPercent(t *testing.T) {
+	got := sqlite.ShowSql("SELECT * FROM t WHERE name LIKE '%a%' AND id = ?", 5)
+	want := "SELECT * FROM t WHERE name LIKE '%a%' AND id = 5"
+	if got != want {
+		t.Errorf("ShowSql = %q; want %q", got, want)
+	}
+}

@@ -133,6 +133,8 @@ func ShowSql(sql string, args ...any) string {
 		newArgs = append(newArgs, arg)
 	}
 
-	format := strings.ReplaceAll(strings.Join(temp2, " "), "?", "%v")
+	// escape literal % (LIKE patterns, ...) before turning ? into verbs
+	format := strings.ReplaceAll(strings.Join(temp2, " "), "%", "%%")
+	format = strings.ReplaceAll(format, "?", "%v")
 	return fmt.Sprintf(format, newArgs...)
 }
