@@ -118,11 +118,11 @@ err := db.Exec(ctx, func(ctx context.Context, conn *sqlite.Conn) error {
 
 ### Transactions
 
-Use `Save` with a deferred call for automatic commit/rollback based on error:
+`Save` opens a savepoint right away and returns the function that ends it. Defer the returned function for automatic commit/rollback based on error (note the `()`: the savepoint has to be opened before the statements run):
 
 ```go
 err := db.Exec(ctx, func(ctx context.Context, conn *sqlite.Conn) (err error) {
-    defer conn.Save(&err)
+    defer conn.Save()(&err)
 
     stmt, _ := conn.Prepare(ctx, "INSERT INTO orders (user_id, total) VALUES (?, ?)", userID, total)
     stmt.Step()
@@ -131,6 +131,20 @@ err := db.Exec(ctx, func(ctx context.Context, conn *sqlite.Conn) (err error) {
     stmt.Step()
 
     return nil // commits on nil, rolls back on error
+})
+```
+
+For transactions that write, prefer `Immediate`, which takes the write lock up front (`BEGIN IMMEDIATE`) so the transaction cannot fail with `SQLITE_BUSY_SNAPSHOT` after it has started reading:
+
+```go
+err := db.Exec(ctx, func(ctx context.Context, conn *sqlite.Conn) (err error) {
+    end, err := conn.Immediate()
+    if err != nil {
+        return err
+    }
+    defer end(&err)
+    // ...
+    return nil
 })
 ```
 

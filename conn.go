@@ -19,12 +19,29 @@ type Conn struct {
 	put  func(conn *Conn)
 }
 
-// When your try to use transaction in a nice way, you can use the following
-// at the beginning of your code:
+// Save opens a savepoint immediately and returns the function that releases
+// it: it commits when *err is nil and rolls back otherwise. Use it at the
+// beginning of a function with a named error result:
 //
-// defer conn.Save(&err)
-func (c *Conn) Save(err *error) {
-	sqlitex.Save(c.conn)(err)
+//	defer conn.Save()(&err)
+//
+// The savepoint must be opened before the statements run, which is why Save
+// is called eagerly and only the returned function is deferred.
+func (c *Conn) Save() func(*error) {
+	return sqlitex.Save(c.conn)
+}
+
+// Immediate starts a BEGIN IMMEDIATE transaction, taking the database write
+// lock up front. Use it for transactions that write, so a read-then-write
+// transaction cannot fail with SQLITE_BUSY_SNAPSHOT halfway through:
+//
+//	end, err := conn.Immediate()
+//	if err != nil {
+//		return err
+//	}
+//	defer end(&err)
+func (c *Conn) Immediate() (func(*error), error) {
+	return sqlitex.ImmediateTransaction(c.conn)
 }
 
 // Done returns the connection back to the pool

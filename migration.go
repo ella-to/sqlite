@@ -94,7 +94,7 @@ func loadAlreadyMigratedFiles(ctx context.Context, conn *Conn) ([]string, error)
 }
 
 func setMigrateFile(ctx context.Context, conn *Conn, filename string, fs ReadDirFileFS) (err error) {
-	defer conn.Save(&err)
+	defer conn.Save()(&err)
 
 	err = func() error {
 		stmt, err := conn.Prepare(ctx, `INSERT INTO migrations_sqlite (filename) VALUES (?);`, filename)
@@ -127,7 +127,7 @@ func setMigrateFile(ctx context.Context, conn *Conn, filename string, fs ReadDir
 }
 
 func createMigrationTable(ctx context.Context, conn *Conn) (err error) {
-	defer conn.Save(&err)
+	defer conn.Save()(&err)
 
 	stmt, err := conn.Prepare(ctx, `CREATE TABLE IF NOT EXISTS migrations_sqlite (filename TEXT PRIMARY KEY);`)
 	if err != nil {
