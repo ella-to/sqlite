@@ -55,3 +55,36 @@ func BenchmarkConnTakePut(b *testing.B) {
 		conn.Done()
 	}
 }
+
+func BenchmarkLoadJsonStruct(b *testing.B) {
+	type item struct {
+		Name string   `json:"name"`
+		Age  int      `json:"age"`
+		Tags []string `json:"tags"`
+	}
+	ctx := context.Background()
+	db, err := sqlite.New(ctx, sqlite.WithMemory(), sqlite.WithPoolSize(1))
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer db.Close()
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer conn.Done()
+	stmt, err := conn.Prepare(ctx, "SELECT ? AS j;", item{Name: "a name", Age: 30, Tags: []string{"x", "y", "z"}})
+	if err != nil {
+		b.Fatal(err)
+	}
+	if _, err := stmt.Step(); err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	for b.Loop() {
+		if _, err := sqlite.LoadJsonStruct[item](stmt, "j"); err != nil {
+			b.Fatal(err)
+		}
+	}
+	_ = stmt.Reset()
+}

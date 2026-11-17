@@ -2,11 +2,10 @@ package sqlite
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
 	"reflect"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -20,12 +19,46 @@ func LoadBool(stmt *Stmt, key string) bool {
 	return stmt.GetInt64(key) != 0
 }
 
+// jsonBufPool recycles the buffers JSON columns are copied into before
+// decoding. json.Unmarshal copies everything it keeps (strings, RawMessage,
+// []byte), so the buffer can be reused as soon as it returns.
+var jsonBufPool = sync.Pool{
+	New: func() any {
+		b := make([]byte, 0, 1024)
+		return &b
+	},
+}
+
+const maxJSONBufRetain = 64 << 10
+
+// loadJSON decodes the JSON in column col into v. It reports false, without
+// touching v, when the column is NULL or empty.
+func loadJSON(stmt *Stmt, col string, v any) (bool, error) {
+	n := stmt.GetLen(col)
+	if n == 0 {
+		return false, nil
+	}
+
+	bp := jsonBufPool.Get().(*[]byte)
+	if cap(*bp) < n {
+		*bp = make([]byte, n)
+	}
+	b := (*bp)[:n]
+	stmt.GetBytes(col, b)
+
+	err := json.Unmarshal(b, v)
+
+	if cap(*bp) <= maxJSONBufRetain {
+		jsonBufPool.Put(bp)
+	}
+	return true, err
+}
+
+// LoadJsonMap decodes a JSON object column. A NULL or empty column (or the
+// JSON null) yields an empty, non-nil map.
 func LoadJsonMap[T any](stmt *Stmt, col string) (map[string]T, error) {
 	var mapper map[string]T
-	err := json.NewDecoder(stmt.GetReader(col)).Decode(&mapper)
-	// NOTE: we need to check for io.EOF because json.NewDecoder returns io.EOF when the input is empty
-	// this is not an error, we can just return an empty slice
-	if err != nil && !errors.Is(err, io.EOF) {
+	if _, err := loadJSON(stmt, col, &mapper); err != nil {
 		return nil, err
 	}
 	if mapper == nil {
@@ -34,12 +67,11 @@ func LoadJsonMap[T any](stmt *Stmt, col string) (map[string]T, error) {
 	return mapper, nil
 }
 
+// LoadJsonArray decodes a JSON array column. A NULL or empty column (or the
+// JSON null) yields an empty, non-nil slice.
 func LoadJsonArray[T any](stmt *Stmt, col string) ([]T, error) {
 	var array []T
-	err := json.NewDecoder(stmt.GetReader(col)).Decode(&array)
-	// NOTE: we need to check for io.EOF because json.NewDecoder returns io.EOF when the input is empty
-	// this is not an error, we can just return an empty slice
-	if err != nil && !errors.Is(err, io.EOF) {
+	if _, err := loadJSON(stmt, col, &array); err != nil {
 		return nil, err
 	}
 	if array == nil {
@@ -48,12 +80,11 @@ func LoadJsonArray[T any](stmt *Stmt, col string) ([]T, error) {
 	return array, nil
 }
 
+// LoadJsonStruct decodes a JSON object column into a new T. A NULL or empty
+// column yields the zero T.
 func LoadJsonStruct[T any](stmt *Stmt, col string) (*T, error) {
 	var obj T
-	err := json.NewDecoder(stmt.GetReader(col)).Decode(&obj)
-	// NOTE: we need to check for io.EOF because json.NewDecoder returns io.EOF when the input is empty
-	// this is not an error, we can just return an empty obj
-	if err != nil && !errors.Is(err, io.EOF) {
+	if _, err := loadJSON(stmt, col, &obj); err != nil {
 		return nil, err
 	}
 	return &obj, nil
