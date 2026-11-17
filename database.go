@@ -52,8 +52,12 @@ const (
 
 // Database struct which holds pool of connection
 type Database struct {
-	stringConn    string
-	pool          *sqlitex.Pool
+	stringConn string
+	pool       *sqlitex.Pool
+	// writePool holds the single connection used by Write. SQLite allows one
+	// writer at a time; funnelling writes through one connection makes them
+	// queue in Go instead of failing with SQLITE_BUSY.
+	writePool     *sqlitex.Pool
 	size          int
 	prepareConnFn ConnPrepareFunc
 	fns           map[string]*FunctionImpl
@@ -92,6 +96,47 @@ func (db *Database) put(conn *Conn) {
 	db.pool.Put(conn.conn)
 }
 
+func (db *Database) putWrite(conn *Conn) {
+	db.writePool.Put(conn.conn)
+}
+
+// Write runs fn on the database's single writer connection inside a
+// BEGIN IMMEDIATE transaction. The transaction commits when fn returns nil
+// and rolls back when it returns an error or panics. Concurrent Write calls
+// wait for each other, so read-modify-write logic inside fn cannot fail with
+// SQLITE_BUSY or SQLITE_BUSY_SNAPSHOT.
+func (db *Database) Write(ctx context.Context, fn func(ctx context.Context, conn *Conn) error) (err error) {
+	raw, err := db.writePool.Take(ctx)
+	if err != nil {
+		return err
+	}
+	conn := &Conn{conn: raw, put: db.putWrite}
+	defer conn.Done()
+
+	end, err := conn.Immediate()
+	if err != nil {
+		return err
+	}
+	defer end(&err)
+
+	return fn(ctx, conn)
+}
+
+// Read runs fn on a pooled connection inside a deferred transaction, so
+// every statement in fn sees the same snapshot of the database. Many Read
+// calls run in parallel. Use Write for anything that modifies the database.
+func (db *Database) Read(ctx context.Context, fn func(ctx context.Context, conn *Conn) error) (err error) {
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Done()
+
+	defer sqlitex.Transaction(conn.conn)(&err)
+
+	return fn(ctx, conn)
+}
+
 // Close closes all the connections in the pool
 // and returns error if any connection fails to close
 // NOTE: make sure to call this function at the end of your application
@@ -101,7 +146,7 @@ func (db *Database) Close() error {
 		return nil
 	}
 	db.optimize()
-	return db.pool.Close()
+	return errors.Join(db.writePool.Close(), db.pool.Close())
 }
 
 // optimize runs PRAGMA optimize on one idle connection, as SQLite recommends
@@ -111,11 +156,12 @@ func (db *Database) optimize() {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
-	conn, err := db.pool.Take(ctx)
+	// optimize may write sqlite_stat1, so it runs on the writer connection
+	conn, err := db.writePool.Take(ctx)
 	if err != nil {
 		return
 	}
-	defer db.pool.Put(conn)
+	defer db.writePool.Put(conn)
 
 	if err := sqlitex.ExecuteTransient(conn, `PRAGMA optimize;`, nil); err != nil {
 		slog.Debug("sqlite: PRAGMA optimize failed", "error", err)
@@ -260,35 +306,43 @@ func New(ctx context.Context, opts ...OptionFunc) (*Database, error) {
 		fmt.Sprintf(`PRAGMA journal_size_limit = %d;`, defaultJournalSizeLimit),
 	}
 
-	pool, err := sqlitex.NewPool(
-		db.stringConn,
-		sqlitex.PoolOptions{
-			Flags:    0,
-			PoolSize: db.size,
-			PrepareConn: func(conn *sqlite.Conn) error {
-				prepareConnMu.Lock()
-				defer prepareConnMu.Unlock()
+	prepareConn := func(conn *sqlite.Conn) error {
+		prepareConnMu.Lock()
+		defer prepareConnMu.Unlock()
 
-				for _, pragma := range pragmas {
-					err := sqlitex.ExecuteTransient(conn, pragma, nil)
-					if err != nil {
-						return err
-					}
-				}
+		for _, pragma := range pragmas {
+			err := sqlitex.ExecuteTransient(conn, pragma, nil)
+			if err != nil {
+				return err
+			}
+		}
 
-				if db.prepareConnFn != nil {
-					return db.prepareConnFn(&Conn{conn: conn, put: func(conn *Conn) {}})
-				}
+		if db.prepareConnFn != nil {
+			return db.prepareConnFn(&Conn{conn: conn, put: func(conn *Conn) {}})
+		}
 
-				return nil
-			},
-		},
-	)
+		return nil
+	}
+
+	writePool, err := sqlitex.NewPool(db.stringConn, sqlitex.PoolOptions{
+		PoolSize:    1,
+		PrepareConn: prepareConn,
+	})
 	if err != nil {
 		return nil, err
 	}
 
+	pool, err := sqlitex.NewPool(db.stringConn, sqlitex.PoolOptions{
+		PoolSize:    db.size,
+		PrepareConn: prepareConn,
+	})
+	if err != nil {
+		_ = writePool.Close()
+		return nil, err
+	}
+
 	db.pool = pool
+	db.writePool = writePool
 
 	return db, nil
 }

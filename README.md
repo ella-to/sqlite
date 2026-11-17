@@ -167,6 +167,32 @@ err := db.Exec(ctx, func(ctx context.Context, conn *sqlite.Conn) (err error) {
 })
 ```
 
+### Write and Read
+
+SQLite allows one writer at a time. `Write` runs a function on a dedicated writer connection inside `BEGIN IMMEDIATE`, so concurrent writers queue up in Go instead of failing with `SQLITE_BUSY`, and read-modify-write logic cannot fail with `SQLITE_BUSY_SNAPSHOT`. It commits when the function returns nil and rolls back on an error or panic:
+
+```go
+err := db.Write(ctx, func(ctx context.Context, conn *sqlite.Conn) error {
+    stmt, err := conn.Prepare(ctx, "UPDATE users SET order_count = order_count + 1 WHERE id = ?", userID)
+    if err != nil {
+        return err
+    }
+    _, err = stmt.Step()
+    return err
+})
+```
+
+`Read` runs a function on a pooled connection inside a deferred transaction, so all of its statements see one consistent snapshot. Reads run in parallel with each other and with the writer:
+
+```go
+err := db.Read(ctx, func(ctx context.Context, conn *sqlite.Conn) error {
+    // SELECT ...
+    return nil
+})
+```
+
+`Conn` and `Exec` keep working as before; `Write` is the safer choice whenever several goroutines modify the database.
+
 ### Running SQL Scripts
 
 ```go
