@@ -133,3 +133,21 @@ func TestPrepareTransient(t *testing.T) {
 	_, err = conn.PrepareTransient(ctx, "SELECT ?;", make(chan int))
 	assert.ErrorIs(t, err, sqlite.ErrUnknownType)
 }
+
+func TestBindNilByteSliceIsEmptyBlob(t *testing.T) {
+	ctx := context.Background()
+	db := newFileDB(t)
+	conn, err := db.Conn(ctx)
+	require.NoError(t, err)
+	defer conn.Done()
+	var nilBytes []byte
+	var nilRaw json.RawMessage
+	ty, _ := bindRoundTrip(t, conn, nilBytes)
+	assert.Equal(t, "blob", ty)
+	ty, _ = bindRoundTrip(t, conn, nilRaw)
+	assert.Equal(t, "blob", ty)
+	type namedBytes []byte
+	ty, v := bindRoundTrip(t, conn, namedBytes("nb"))
+	assert.Equal(t, "blob", ty)
+	assert.Equal(t, "nb", v)
+}

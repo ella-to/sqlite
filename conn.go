@@ -110,10 +110,9 @@ func (c *Conn) PrepareTransient(ctx context.Context, sql string, values ...any) 
 }
 
 func bindValues(stmt *Stmt, values []any) error {
-	var buffer bytes.Buffer
 	for i, value := range values {
 		// bind starts from 1
-		if err := bindValue(stmt, i+1, value, &buffer); err != nil {
+		if err := bindValue(stmt, i+1, value); err != nil {
 			return err
 		}
 	}
@@ -128,9 +127,38 @@ func (c *Conn) ExecScript(sql string) error {
 var timeType = reflect.TypeOf(time.Time{})
 
 // bindValue binds one Go value to the 1-based parameter i of stmt.
-func bindValue(stmt *Stmt, i int, value any, buffer *bytes.Buffer) error {
-	if value == nil {
+func bindValue(stmt *Stmt, i int, value any) error {
+	// fast path for the common types, no reflection
+	switch v := value.(type) {
+	case nil:
 		stmt.BindNull(i)
+		return nil
+	case string:
+		stmt.BindText(i, v)
+		return nil
+	case int:
+		stmt.BindInt64(i, int64(v))
+		return nil
+	case int64:
+		stmt.BindInt64(i, v)
+		return nil
+	case int32:
+		stmt.BindInt64(i, int64(v))
+		return nil
+	case float64:
+		stmt.BindFloat(i, v)
+		return nil
+	case bool:
+		stmt.BindBool(i, v)
+		return nil
+	case []byte:
+		stmt.BindBytes(i, v)
+		return nil
+	case json.RawMessage:
+		stmt.BindBytes(i, v)
+		return nil
+	case time.Time:
+		stmt.BindInt64(i, v.UTC().Unix())
 		return nil
 	}
 
@@ -146,29 +174,29 @@ func bindValue(stmt *Stmt, i int, value any, buffer *bytes.Buffer) error {
 		elem := rv.Elem()
 		if elem.Type() == timeType {
 			// *time.Time binds like time.Time (Unix seconds), not via String()
-			return bindValue(stmt, i, elem.Interface(), buffer)
+			return bindValue(stmt, i, elem.Interface())
 		}
 		if v, ok := value.(fmt.Stringer); ok {
 			stmt.BindText(i, v.String())
 			return nil
 		}
 		if elem.Kind() == reflect.Struct && elem.Type() != timeType {
-			return bindJSON(stmt, i, value, buffer)
+			return bindJSON(stmt, i, value)
 		}
 		// pointers to scalars (and *time.Time) bind as the value they point to
-		return bindValue(stmt, i, elem.Interface(), buffer)
+		return bindValue(stmt, i, elem.Interface())
 	}
 
 	switch valueType.Kind() {
 	case reflect.Slice:
 		if valueType.Elem().Kind() == reflect.Uint8 {
-			stmt.BindZeroBlob(i, int64(rv.Len()))
+			// BindBytes binds an empty (non-NULL) blob for a zero length slice
 			stmt.BindBytes(i, rv.Bytes())
 			return nil
 		}
-		return bindJSON(stmt, i, value, buffer)
+		return bindJSON(stmt, i, value)
 	case reflect.Map:
-		return bindJSON(stmt, i, value, buffer)
+		return bindJSON(stmt, i, value)
 	case reflect.String:
 		stmt.BindText(i, rv.String())
 		return nil
@@ -202,15 +230,17 @@ func bindValue(stmt *Stmt, i int, value any, buffer *bytes.Buffer) error {
 	// NOTE: this must stay after the time.Time check, time.Time is a struct
 	// too and must not be encoded to JSON
 	if valueType.Kind() == reflect.Struct {
-		return bindJSON(stmt, i, value, buffer)
+		return bindJSON(stmt, i, value)
 	}
 
 	return ErrUnknownType
 }
 
-func bindJSON(stmt *Stmt, i int, value any, buffer *bytes.Buffer) error {
-	buffer.Reset()
-	if err := json.NewEncoder(buffer).Encode(value); err != nil {
+// bindJSON stores value as JSON text. The encoding (including the trailing
+// newline json.Encoder writes) is part of the stored format; keep it.
+func bindJSON(stmt *Stmt, i int, value any) error {
+	var buffer bytes.Buffer
+	if err := json.NewEncoder(&buffer).Encode(value); err != nil {
 		return err
 	}
 	stmt.BindText(i, buffer.String())
