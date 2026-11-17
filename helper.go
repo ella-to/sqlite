@@ -15,8 +15,9 @@ func LoadTime(stmt *Stmt, key string) time.Time {
 	return time.Unix(value, 0).UTC()
 }
 
+// LoadBool follows SQLite's own truthiness: any non-zero integer is true.
 func LoadBool(stmt *Stmt, key string) bool {
-	return stmt.GetInt64(key) == 1
+	return stmt.GetInt64(key) != 0
 }
 
 func LoadJsonMap[T any](stmt *Stmt, col string) (map[string]T, error) {

@@ -104,3 +104,20 @@ func TestMemoryDatabasesAreIsolated(t *testing.T) {
 	_, err = conn.Prepare(ctx, "SELECT * FROM only_in_a;")
 	assert.Error(t, err)
 }
+
+func TestLoadBoolNonZero(t *testing.T) {
+	ctx := context.Background()
+	db := newFileDB(t)
+	conn, err := db.Conn(ctx)
+	require.NoError(t, err)
+	defer conn.Done()
+	stmt, err := conn.Prepare(ctx, "SELECT 0 AS f, 1 AS t1, 2 AS t2, -1 AS t3;")
+	require.NoError(t, err)
+	_, err = stmt.Step()
+	require.NoError(t, err)
+	assert.False(t, sqlite.LoadBool(stmt, "f"))
+	assert.True(t, sqlite.LoadBool(stmt, "t1"))
+	assert.True(t, sqlite.LoadBool(stmt, "t2"))
+	assert.True(t, sqlite.LoadBool(stmt, "t3"))
+	require.NoError(t, stmt.Reset())
+}

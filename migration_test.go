@@ -41,3 +41,19 @@ func TestMigrationFailureIsRetried(t *testing.T) {
 	assert.Equal(t, int64(1), countRows(t, conn, "migrations_sqlite"))
 	assert.Equal(t, int64(0), countRows(t, conn, "ok"))
 }
+
+func TestMigrationNestedDir(t *testing.T) {
+	ctx := context.Background()
+	db := newFileDB(t)
+	fsys := fstest.MapFS{
+		"db/migrations/002.sql": {Data: []byte("INSERT INTO a (v) VALUES (2);")},
+		"db/migrations/001.sql": {Data: []byte("CREATE TABLE a (v INTEGER);")},
+		"db/migrations/readme": {Data: []byte("not sql")},
+	}
+	require.NoError(t, sqlite.Migration(ctx, db, fsys, "db/migrations"))
+	conn, err := db.Conn(ctx)
+	require.NoError(t, err)
+	defer conn.Done()
+	assert.Equal(t, int64(1), countRows(t, conn, "a"))
+	assert.Equal(t, int64(2), countRows(t, conn, "migrations_sqlite"))
+}

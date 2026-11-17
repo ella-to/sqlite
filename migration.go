@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
-	"path/filepath"
+	"path"
 	"slices"
 	"sort"
 )
@@ -149,11 +149,12 @@ func sortMigrationFiles(fs ReadDirFileFS, dir string) ([]string, error) {
 			continue
 		}
 
-		if filepath.Ext(file.Name()) != ".sql" {
+		if path.Ext(file.Name()) != ".sql" {
 			continue
 		}
 
-		sqlFiles = append(sqlFiles, filepath.Join(dir, file.Name()))
+		// fs.FS paths always use forward slashes, whatever the OS
+		sqlFiles = append(sqlFiles, path.Join(dir, file.Name()))
 	}
 
 	sort.Strings(sqlFiles)
